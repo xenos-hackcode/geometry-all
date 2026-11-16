@@ -1104,7 +1104,9 @@ async function finishRace() {
 
 function sendRaceProgress(runner, progress) {
   if (runner.progressRequest) return runner.progressRequest;
-  const newCoinIndices = [...runner.collected].filter((index) => !runner.savedCoinIndices.has(index));
+  // Only report coins we're already past, so the server's position check always agrees.
+  const newCoinIndices = [...runner.collected].filter((index) =>
+    !runner.savedCoinIndices.has(index) && COIN_POSITIONS[index] <= Math.floor(progress));
   const request = rpc("update_race_progress", {
     room_code: state.room.code,
     new_progress: Math.floor(progress),
