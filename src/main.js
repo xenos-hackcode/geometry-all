@@ -114,16 +114,176 @@ function character(id) {
   return CHARACTERS.find((item) => item.id === id) ?? CHARACTERS[0];
 }
 
-function initPage() {
+// ---------- Jotter Note: the notebook you see first ----------
+
+const NOTES_KEY = "jotter-note:notes";
+const notebook = { notes: loadNotes(), activeId: null };
+
+function loadNotes() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(NOTES_KEY));
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveNotes() {
+  try {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(notebook.notes));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function newNote() {
+  const note = {
+    id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title: "",
+    body: "",
+    updated: Date.now(),
+  };
+  notebook.notes.unshift(note);
+  notebook.activeId = note.id;
+  saveNotes();
+  return note;
+}
+
+function noteLabel(note) {
+  return note.title.trim() || note.body.trim().split("\n")[0].slice(0, 40) || "Untitled note";
+}
+
+function noteDate(timestamp) {
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  }).format(timestamp);
+}
+
+function wordCount(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return `${words} word${words === 1 ? "" : "s"}`;
+}
+
+function renderNotebook() {
+  state.screen = "notebook";
+  document.body.classList.add("notebook-mode");
+  if (!notebook.notes.length) newNote();
+  if (!notebook.notes.some((note) => note.id === notebook.activeId)) {
+    notebook.activeId = [...notebook.notes].sort((a, b) => b.updated - a.updated)[0].id;
+  }
+  const active = notebook.notes.find((note) => note.id === notebook.activeId);
+  const sorted = [...notebook.notes].sort((a, b) => b.updated - a.updated);
+  root.innerHTML = `
+    <div class="nb-shell">
+      <header class="nb-topbar">
+        <div class="nb-brand"><span class="nb-mark">✎</span>Jotter Note</div>
+        <div class="nb-actions">
+          <button class="nb-button" id="nb-new">+ New note</button>
+          <button class="nb-button nb-read" id="nb-read" title="Open the fun side">Read</button>
+        </div>
+      </header>
+      <div class="nb-layout">
+        <aside class="nb-sidebar">
+          <input class="nb-search" id="nb-search" type="search" placeholder="Search notes" aria-label="Search notes">
+          <ul class="nb-list">${sorted.map((note) => `
+            <li data-note-item="${escapeHtml(note.id)}">
+              <button class="nb-item${note.id === active.id ? " active" : ""}" data-note="${escapeHtml(note.id)}">
+                <span class="nb-item-title">${escapeHtml(noteLabel(note))}</span>
+                <span class="nb-item-date">${noteDate(note.updated)}</span>
+              </button>
+            </li>`).join("")}
+          </ul>
+          <p class="nb-empty" id="nb-empty" hidden>No notes match.</p>
+        </aside>
+        <section class="nb-page">
+          <input class="nb-title" id="nb-title" placeholder="Title" maxlength="120" value="${escapeHtml(active.title)}" aria-label="Note title">
+          <p class="nb-meta"><span id="nb-saved">Saved</span> · <span id="nb-count">${wordCount(active.body)}</span></p>
+          <textarea class="nb-body" id="nb-body" placeholder="Start writing…" aria-label="Note">${escapeHtml(active.body)}</textarea>
+          <div class="nb-footer">
+            <span class="nb-hint">Notes are saved in this browser.</span>
+            <button class="nb-button nb-danger" id="nb-delete">Delete note</button>
+          </div>
+        </section>
+      </div>
+    </div>`;
+
+  const titleInput = document.querySelector("#nb-title");
+  const bodyInput = document.querySelector("#nb-body");
+  const savedLabel = document.querySelector("#nb-saved");
+  const onEdit = () => {
+    active.title = titleInput.value;
+    active.body = bodyInput.value;
+    active.updated = Date.now();
+    savedLabel.textContent = saveNotes() ? "Saved" : "Could not save (storage is blocked)";
+    document.querySelector("#nb-count").textContent = wordCount(active.body);
+    const item = document.querySelector(`[data-note="${CSS.escape(active.id)}"]`);
+    if (item) {
+      item.querySelector(".nb-item-title").textContent = noteLabel(active);
+      item.querySelector(".nb-item-date").textContent = noteDate(active.updated);
+    }
+  };
+  titleInput.addEventListener("input", onEdit);
+  bodyInput.addEventListener("input", onEdit);
+
+  document.querySelectorAll("[data-note]").forEach((button) => {
+    button.addEventListener("click", () => {
+      notebook.activeId = button.dataset.note;
+      renderNotebook();
+    });
+  });
+  document.querySelector("#nb-new").addEventListener("click", () => {
+    newNote();
+    renderNotebook();
+    document.querySelector("#nb-title")?.focus();
+  });
+  document.querySelector("#nb-delete").addEventListener("click", () => {
+    if (!window.confirm(`Delete "${noteLabel(active)}"?`)) return;
+    notebook.notes = notebook.notes.filter((note) => note.id !== active.id);
+    notebook.activeId = null;
+    saveNotes();
+    renderNotebook();
+  });
+  document.querySelector("#nb-search").addEventListener("input", (event) => {
+    const query = event.currentTarget.value.trim().toLowerCase();
+    let shown = 0;
+    notebook.notes.forEach((note) => {
+      const row = document.querySelector(`[data-note-item="${CSS.escape(note.id)}"]`);
+      const match = !query || `${note.title}\n${note.body}`.toLowerCase().includes(query);
+      if (row) row.hidden = !match;
+      if (match) shown += 1;
+    });
+    document.querySelector("#nb-empty").hidden = shown > 0;
+  });
+  document.querySelector("#nb-read").addEventListener("click", openGame);
+}
+
+// ---------- The fun side (Neon Dash) ----------
+
+function openGame() {
+  document.body.classList.remove("notebook-mode");
   if (!supabaseUrl || !supabaseKey) {
     renderSetup();
     return;
   }
-  db = createClient(supabaseUrl, supabaseKey, {
-    realtime: { params: { eventsPerSecond: 15 } },
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-  });
+  if (state.profile) {
+    renderHome();
+    return;
+  }
+  if (!db) {
+    db = createClient(supabaseUrl, supabaseKey, {
+      realtime: { params: { eventsPerSecond: 15 } },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+  }
+  root.innerHTML = '<main class="loading"><p>Loading the fun side…</p></main>';
   void initializeSession();
+}
+
+function initPage() {
+  // Invite links go straight to the game; everyone else lands in the notebook.
+  if (params.get("room")) openGame();
+  else renderNotebook();
 }
 
 async function initializeSession() {
@@ -193,6 +353,7 @@ function topbar(showCoins = true) {
     <header class="topbar">
       <a class="brand" href="/" data-action="home"><span class="brand-mark">◇</span><span class="brand-name">Neon Dash</span></a>
       <div class="top-actions">
+        <button class="button button-quiet button-small" data-action="notes">✎ Notes</button>
         ${showCoins && state.profile ? `<span class="coin-pill">✦ ${money(state.profile.coins)} coins</span>` : ""}
         ${state.profile ? `<button class="button button-quiet button-small" data-action="profile">Hi, ${escapeHtml(playerName)}</button>` : ""}
       </div>
@@ -944,6 +1105,12 @@ function bindCommon() {
       if (name === "return-lobby") void action(returnToLobby);
       if (name === "back-room") void syncRoom();
       if (name === "save-name") void action(saveDisplayName);
+      if (name === "notes") {
+        void action(async () => {
+          if (state.room) await leaveRoom();
+          renderNotebook();
+        });
+      }
       if (button instanceof HTMLAnchorElement) event.preventDefault();
     });
   });

@@ -98,3 +98,39 @@ h3 { margin-bottom: 8px; font-size: 18px; }
   .game-canvas { min-height: 220px; }
   .top-actions .button { padding: 0 11px; }
 }
+
+/* ---------- Jotter Note notebook ---------- */
+body.notebook-mode { color: #2b2a26; background: #efe9dc; font-family: "Space Grotesk", sans-serif; }
+.nb-shell { width: min(1100px, calc(100% - 24px)); margin: 0 auto; padding: 18px 0 32px; }
+.nb-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.nb-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; letter-spacing: -.03em; }
+.nb-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; color: #fff; background: #d9822b; font-size: 18px; }
+.nb-actions { display: flex; gap: 8px; }
+.nb-button { min-height: 38px; padding: 0 14px; border: 1px solid #cfc6b3; border-radius: 10px; color: #2b2a26; background: #fffdf8; font-weight: 600; }
+.nb-button:hover { background: #f7f1e4; }
+.nb-read { border-color: #2f5d8a; color: #fff; background: #2f5d8a; }
+.nb-read:hover { background: #264d73; }
+.nb-danger { border-color: #e2b7b0; color: #a3392b; background: transparent; }
+.nb-danger:hover { background: #fbecea; }
+.nb-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 14px; min-height: calc(100vh - 110px); }
+.nb-sidebar { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #ddd4c2; border-radius: 14px; background: #f8f4ea; }
+.nb-search { min-height: 38px; padding: 0 11px; border: 1px solid #d6ccb8; border-radius: 9px; outline: 0; color: inherit; background: #fffdf8; }
+.nb-search:focus, .nb-title:focus { border-color: #2f5d8a; }
+.nb-list { display: grid; gap: 4px; padding: 0; margin: 0; list-style: none; overflow-y: auto; }
+.nb-item { display: grid; width: 100%; gap: 3px; padding: 9px 10px; border: 1px solid transparent; border-radius: 9px; color: inherit; background: transparent; text-align: left; }
+.nb-item:hover { background: #efe8d8; }
+.nb-item.active { border-color: #e3cfa6; background: #fff4dc; }
+.nb-item-title { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.nb-item-date, .nb-meta, .nb-hint, .nb-empty { color: #8a826f; font-size: 12px; }
+.nb-empty { margin: 4px 2px; }
+.nb-page { display: flex; flex-direction: column; padding: 22px 26px; border: 1px solid #ddd4c2; border-radius: 14px; background: #fffdf8; box-shadow: 0 10px 30px #5b4a2a14; }
+.nb-title { padding: 4px 0; border: 0; border-bottom: 1px solid transparent; outline: 0; color: inherit; background: transparent; font-size: 28px; font-weight: 700; letter-spacing: -.03em; }
+.nb-meta { margin: 6px 0 12px; }
+.nb-body { flex: 1; min-height: 360px; padding: 0 2px; border: 0; outline: 0; resize: none; color: inherit; background: transparent repeating-linear-gradient(#fffdf8 0 31px, #e8e1d1 31px 32px); font: 16px/32px "Space Grotesk", sans-serif; }
+.nb-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+@media (max-width: 690px) {
+  .nb-layout { grid-template-columns: 1fr; }
+  .nb-sidebar { max-height: 210px; }
+  .nb-page { padding: 16px; }
+  .nb-title { font-size: 22px; }
+}
