@@ -6,8 +6,12 @@ files are not included or modified.
 ## Rooms and players
 
 - One player creates a room and shares its six-character code.
-- Other players enter the code to join; the host starts when at least two people
-  are in the lobby.
+- Other players enter the code to join. Rooms hold up to 15 racers.
+- No one around? The host can add 1 to 14 bots to fill empty seats, so you can
+  race solo. If a new player joins a full room, a bot gives up its seat.
+- The host can start once there are at least two racers (people or bots).
+- Bots count for placement: if a bot crosses the line before you, it is ahead
+  of you in the results and for stat points.
 - Every cosmetic character is unlocked from the start.
 - A guest profile is created per browser the first time someone plays.
 

@@ -30,3 +30,23 @@ test("permanent and temporary buffs affect the intended stats", () => {
 test("race has a fixed positive finish distance", () => {
   assert.equal(TRACK_LENGTH, 6000);
 });
+
+import { botSpeed, botFinishSeconds, botProgress, maxBots, raceSeed } from "./race-engine.js";
+
+test("bots are deterministic and race at a fair speed", () => {
+  const seed = raceSeed("2026-11-16T11:34:12.123456+00:00");
+  assert.equal(seed, raceSeed("2026-11-16T11:34:12.999+00:00"));
+  for (let bot = 0; bot < 14; bot += 1) {
+    const speed = botSpeed(seed, bot);
+    assert.ok(speed >= 190 && speed <= 300);
+    assert.equal(botSpeed(seed, bot), speed);
+  }
+  assert.equal(botProgress(seed, 0, 0), 0);
+  assert.equal(botProgress(seed, 0, botFinishSeconds(seed, 0) + 5), TRACK_LENGTH);
+});
+
+test("rooms hold 15 racers including bots", () => {
+  assert.equal(maxBots(1), 14);
+  assert.equal(maxBots(15), 0);
+  assert.equal(maxBots(20), 0);
+});

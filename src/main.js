@@ -5,7 +5,13 @@ import {
   JUMP_DURATION,
   OBSTACLE_POSITIONS,
   TRACK_LENGTH,
+  BOT_NAMES,
+  MAX_RACERS,
+  botFinishSeconds,
+  botProgress,
   getRaceStats,
+  maxBots,
+  raceSeed,
 } from "./race-engine.js";
 import "./style.css";
 
@@ -112,6 +118,30 @@ async function refreshProfile() {
 
 function character(id) {
   return CHARACTERS.find((item) => item.id === id) ?? CHARACTERS[0];
+}
+
+function botCount() {
+  return Math.max(0, Math.min(state.room?.bot_count ?? 0, maxBots(state.players.length)));
+}
+
+function bots() {
+  return Array.from({ length: botCount() }, (_, index) => ({
+    index,
+    name: `${BOT_NAMES[index % BOT_NAMES.length]} (bot)`,
+    character: CHARACTERS[(index + 2) % CHARACTERS.length],
+  }));
+}
+
+function raceElapsedSeconds() {
+  if (!state.room?.race_started_at) return 0;
+  return Math.max(0, (Date.now() - Date.parse(state.room.race_started_at)) / 1000);
+}
+
+async function setBots(count) {
+  const room = rpcValue(await rpc("set_bot_count", { room_code: state.room.code, new_count: count }));
+  state.room = { ...state.room, ...room };
+  await subscription?.send({ type: "broadcast", event: "room-changed", payload: {} });
+  renderRoom();
 }
 
 // ---------- Jotter Note: the notebook you see first ----------
@@ -514,7 +544,7 @@ async function syncRoom() {
   if (!state.room || state.roomSyncing) return;
   state.roomSyncing = true;
   try {
-    const { data, error } = await db.from("rooms").select("id,code,host_id,status").eq("id", state.room.id).single();
+    const { data, error } = await db.from("rooms").select("id,code,host_id,status,bot_count,race_started_at").eq("id", state.room.id).single();
     if (error) throw error;
     state.room = { ...state.room, ...data };
     await refreshPlayers();
@@ -549,7 +579,22 @@ function renderRoom() {
       </span>
       <span class="badge">${avatar.name}</span>
     </li>`;
-  }).join("");
+  }).join("") + bots().map((bot) => `<li class="list-item">
+      <span class="player-name"><span class="avatar" style="--avatar:${bot.character.color}"></span>${escapeHtml(bot.name)}</span>
+      <span class="badge">BOT</span>
+    </li>`).join("");
+  const racerCount = state.players.length + botCount();
+  const botLimit = maxBots(state.players.length);
+  const botPicker = host && state.room.status === "lobby" ? `
+    <div class="bot-picker">
+      <div><h3>Bots</h3><p class="hint">No one around? Fill empty seats with bots (up to ${botLimit}).</p></div>
+      <div class="row">
+        <button class="button button-secondary button-small" data-bots="${botCount() - 1}" ${botCount() <= 0 ? "disabled" : ""} aria-label="Remove a bot">−</button>
+        <span class="bot-count">${botCount()}</span>
+        <button class="button button-secondary button-small" data-bots="${botCount() + 1}" ${botCount() >= botLimit ? "disabled" : ""} aria-label="Add a bot">+</button>
+        <button class="button button-quiet button-small" data-bots="${botLimit}" ${botCount() >= botLimit ? "disabled" : ""}>Fill all</button>
+      </div>
+    </div>` : "";
   root.innerHTML = `
     <div class="shell">
       ${topbar()}
@@ -558,7 +603,7 @@ function renderRoom() {
         <p class="eyebrow">${state.room.status === "race" ? "Race is live" : "Lobby is open"}</p>
         <div class="row" style="justify-content:space-between">
           <div><h1 style="font-size:clamp(34px,6vw,52px)">Room <span class="room-code">${escapeHtml(state.room.code)}</span></h1>
-            <p class="lead">Share the invite link or code with classmates. Up to 8 players can race.</p></div>
+            <p class="lead">Share the invite link or code with friends. Up to ${MAX_RACERS} racers, and bots fill any empty seats.</p></div>
           <div class="button-row"><button class="button button-secondary button-small" data-action="copy-link">Copy invite link</button><button class="button button-quiet button-small" data-action="profile">Profile</button></div>
         </div>
         <label class="field" style="max-width:560px">Invite link
@@ -566,8 +611,9 @@ function renderRoom() {
         </label>
         <div class="grid">
           <article class="card">
-            <div class="row" style="justify-content:space-between"><h3>Racers</h3><span class="badge">${state.players.length}/8</span></div>
+            <div class="row" style="justify-content:space-between"><h3>Racers</h3><span class="badge">${racerCount}/${MAX_RACERS}</span></div>
             <ul class="list">${players || '<li class="hint">Waiting for racers…</li>'}</ul>
+            ${botPicker}
           </article>
           <article class="card">
             <p class="eyebrow">Your character</p><h3>${selected.name} <span class="badge">UNLOCKED</span></h3>
@@ -579,7 +625,8 @@ function renderRoom() {
           </article>
         </div>
         <div class="button-row" style="margin-top:20px">
-          ${host ? `<button class="button button-primary" data-action="start-race" ${state.players.length < 2 || state.room.status !== "lobby" ? "disabled" : ""}>${state.room.status === "race" ? "Race starting…" : "Start race"}</button>` : '<span class="hint">Waiting for the host to start the race…</span>'}
+          ${host ? `<button class="button button-primary" data-action="start-race" ${racerCount < 2 || state.room.status !== "lobby" ? "disabled" : ""}>${state.room.status === "race" ? "Race starting…" : "Start race"}</button>` : '<span class="hint">Waiting for the host to start the race…</span>'}
+          ${host && racerCount < 2 ? '<span class="hint">Add at least one bot to race solo.</span>' : ""}
           <button class="button button-quiet" data-action="leave-room">Leave room</button>
         </div>
       </section>
@@ -592,6 +639,9 @@ function renderRoom() {
       state.profile = rpcValue(await rpc("set_character", { new_character: button.dataset.character }));
       renderRoom();
     }));
+  });
+  document.querySelectorAll("[data-bots]").forEach((button) => {
+    button.addEventListener("click", () => void action(() => setBots(Number(button.dataset.bots))));
   });
 }
 
@@ -797,56 +847,120 @@ function drawRace(canvas, now) {
   }
 
   const local = state.runner;
-  const otherPlayers = state.players.filter((player) => player.user_id !== state.user.id);
-  const lanes = [local, ...otherPlayers.map((player) => ({
-    progress: state.remoteRunners.get(player.user_id)?.progress ?? 0,
-    character: character(player.character_id),
-    name: player.display_name,
-  }))];
-  const laneHeight = (height - 44) / Math.max(lanes.length, 1);
+  const elapsed = raceElapsedSeconds();
+  const seed = state.room?.race_started_at ? raceSeed(state.room.race_started_at) : 0;
+  const others = [
+    ...state.players.filter((player) => player.user_id !== state.user.id).map((player) => ({
+      progress: state.remoteRunners.get(player.user_id)?.progress ?? (player.finish_place ? TRACK_LENGTH : 0),
+      character: character(player.character_id),
+      name: player.display_name,
+    })),
+    ...bots().map((bot) => ({
+      progress: botProgress(seed, bot.index, elapsed),
+      character: bot.character,
+      name: bot.name,
+    })),
+  ];
   const viewDistance = 1550;
   const runnerX = Math.min(155, width * 0.2);
+  const myName = state.profile.display_name;
 
-  lanes.forEach((runner, lane) => {
-    const top = 18 + lane * laneHeight;
-    const ground = top + laneHeight - 12;
-    context.fillStyle = lane === 0 ? "#1d3150" : "#172541";
-    roundedRect(context, 12, top, width - 24, laneHeight - 8, 10);
+  if (others.length <= 3) {
+    // Few racers: one lane each.
+    const lanes = [local, ...others];
+    const laneHeight = (height - 44) / lanes.length;
+    lanes.forEach((runner, lane) => {
+      const top = 18 + lane * laneHeight;
+      const ground = top + laneHeight - 12;
+      context.fillStyle = lane === 0 ? "#1d3150" : "#172541";
+      roundedRect(context, 12, top, width - 24, laneHeight - 8, 10);
+      context.fill();
+      context.fillStyle = "#72f2c466";
+      context.fillRect(22, ground, width - 44, 2);
+      context.font = "12px 'DM Mono', monospace";
+      context.textAlign = "left"; context.textBaseline = "top";
+      context.fillStyle = "#c8d3e8";
+      context.fillText(runner.name ?? myName, 26, top + 8);
+      const progress = runner.progress ?? 0;
+      const worldX = (world) => runnerX + ((world - progress) / viewDistance) * (width - runnerX - 40);
+      OBSTACLE_POSITIONS.forEach((world, index) => {
+        const x = worldX(world);
+        if (x > 12 && x < width - 12) drawObstacle(context, x, ground, 20, 15 + (index % 2) * 7);
+      });
+      COIN_POSITIONS.forEach((world, index) => {
+        const x = worldX(world);
+        if (x > 12 && x < width - 12 && (lane !== 0 || !local.collected.has(index))) drawCoin(context, x, ground - 35);
+      });
+      if (lane === 0) {
+        drawLocalRunner(context, local, runnerX, ground, now);
+      } else {
+        drawAvatar(context, runner, runnerX, ground - 17, 13);
+      }
+    });
+  } else {
+    // Lots of racers: one shared track, everyone else as ghosts, plus a progress strip.
+    const stripLeft = 26;
+    const stripRight = width - 120;
+    const stripY = 22;
+    context.strokeStyle = "#72f2c455";
+    context.lineWidth = 3;
+    context.beginPath(); context.moveTo(stripLeft, stripY); context.lineTo(stripRight, stripY); context.stroke();
+    const stripX = (progress) => stripLeft + (stripRight - stripLeft) * (progress / TRACK_LENGTH);
+    others.forEach((runner) => {
+      context.fillStyle = runner.character.color;
+      context.globalAlpha = 0.85;
+      context.beginPath(); context.arc(stripX(runner.progress), stripY, 4, 0, Math.PI * 2); context.fill();
+    });
+    context.globalAlpha = 1;
+    context.fillStyle = local.character.color;
+    context.strokeStyle = "#ffffff";
+    context.lineWidth = 2;
+    context.beginPath(); context.arc(stripX(local.progress), stripY, 6, 0, Math.PI * 2); context.fill(); context.stroke();
+
+    const top = 44;
+    const ground = height - 26;
+    context.fillStyle = "#1d3150";
+    roundedRect(context, 12, top, width - 24, height - top - 12, 12);
     context.fill();
     context.fillStyle = "#72f2c466";
     context.fillRect(22, ground, width - 44, 2);
-    context.font = "12px 'DM Mono', monospace";
-    context.textAlign = "left"; context.textBaseline = "top";
-    context.fillStyle = "#c8d3e8";
-    context.fillText(runner.name ?? state.profile.display_name, 26, top + 8);
-
-    const progress = runner.progress ?? 0;
-    const worldX = (world) => runnerX + ((world - progress) / viewDistance) * (width - runnerX - 40);
+    const worldX = (world) => runnerX + ((world - local.progress) / viewDistance) * (width - runnerX - 40);
     OBSTACLE_POSITIONS.forEach((world, index) => {
       const x = worldX(world);
-      if (x > 12 && x < width - 12) drawObstacle(context, x, ground, 20, 15 + (index % 2) * 7);
+      if (x > 12 && x < width - 12) drawObstacle(context, x, ground, 22, 18 + (index % 2) * 8);
     });
     COIN_POSITIONS.forEach((world, index) => {
       const x = worldX(world);
-      if (x > 12 && x < width - 12 && (lane !== 0 || !local.collected.has(index))) drawCoin(context, x, ground - 35);
+      if (x > 12 && x < width - 12 && !local.collected.has(index)) drawCoin(context, x, ground - 40);
     });
-    if (lane === 0) {
-      const jumping = now < local.jumpingUntil;
-      const jumpPhase = jumping ? (now - local.jumpOrigin) / (local.jumpingUntil - local.jumpOrigin) : 0;
-      const jumpOffset = jumping ? Math.sin(Math.PI * jumpPhase) * local.stats.jumpHeight : 0;
-      drawAvatar(context, local, runnerX, ground - 17 - jumpOffset, 15);
-      context.font = "11px 'DM Mono', monospace";
-      context.fillStyle = "#72f2c4";
-      context.fillText(`${Math.min(100, Math.floor(local.progress / TRACK_LENGTH * 100))}%`, width - 48, top + 8);
-    } else {
-      const x = Math.max(36, Math.min(width - 32, worldX(progress)));
-      drawAvatar(context, runner, x, ground - 17, 13);
-    }
-  });
+    context.font = "11px 'DM Mono', monospace";
+    context.textAlign = "center"; context.textBaseline = "bottom";
+    others.forEach((runner, index) => {
+      const x = worldX(runner.progress);
+      if (x < 16 || x > width - 16) return;
+      const lift = (index % 3) * 12;
+      context.globalAlpha = 0.42;
+      drawAvatar(context, runner, x, ground - 17 - lift, 14);
+      context.globalAlpha = 0.75;
+      context.fillStyle = "#c8d3e8";
+      context.fillText(runner.name, x, ground - 36 - lift);
+    });
+    context.globalAlpha = 1;
+    drawLocalRunner(context, local, runnerX, ground, now, 17);
+  }
+
+  const position = 1 + others.filter((runner) => runner.progress > local.progress).length;
   context.fillStyle = "#d9e6ff";
   context.font = "12px 'DM Mono', monospace";
-  context.textAlign = "right";
-  context.fillText(`${Math.floor(Math.min(100, local.progress / TRACK_LENGTH * 100))}%`, width - 20, 18);
+  context.textAlign = "right"; context.textBaseline = "top";
+  context.fillText(`P${position}/${others.length + 1} · ${Math.floor(Math.min(100, local.progress / TRACK_LENGTH * 100))}%`, width - 20, 14);
+}
+
+function drawLocalRunner(context, local, x, ground, now, size = 15) {
+  const jumping = now < local.jumpingUntil;
+  const jumpPhase = jumping ? (now - local.jumpOrigin) / (local.jumpingUntil - local.jumpOrigin) : 0;
+  const jumpOffset = jumping ? Math.sin(Math.PI * jumpPhase) * local.stats.jumpHeight : 0;
+  drawAvatar(context, local, x, ground - 17 - jumpOffset, size);
 }
 
 async function finishRace() {
@@ -944,6 +1058,24 @@ function tickRace(now, canvas) {
   animationFrame = requestAnimationFrame((time) => tickRace(time, canvas));
 }
 
+function standings() {
+  const startedAt = state.room?.race_started_at;
+  const started = startedAt ? Date.parse(startedAt) : null;
+  const seed = startedAt ? raceSeed(startedAt) : 0;
+  const elapsed = raceElapsedSeconds();
+  const humans = state.players.map((player) => ({
+    name: player.display_name,
+    color: character(player.character_id).color,
+    time: player.finished_at && started ? (Date.parse(player.finished_at) - started) / 1000 : null,
+    you: player.user_id === state.user.id,
+  }));
+  const botRows = bots().map((bot) => {
+    const finish = botFinishSeconds(seed, bot.index);
+    return { name: bot.name, color: bot.character.color, time: started && finish <= elapsed ? finish : null, bot: true };
+  });
+  return [...humans, ...botRows].sort((a, b) => (a.time ?? Infinity) - (b.time ?? Infinity));
+}
+
 function renderResults() {
   state.screen = "results";
   const place = state.result?.place ?? state.runner?.place;
@@ -966,8 +1098,9 @@ function renderResults() {
           <div class="stat"><span class="eyebrow">Race total</span><span class="stat-value">${state.runner?.pickups ?? 0} ✦</span></div>
         </div>
         <div class="grid">
-          <article class="card"><h3>Room results</h3><ol class="list">${[...state.players].sort((a, b) => (a.finish_place ?? 99) - (b.finish_place ?? 99)).map((player) => `
-            <li class="list-item"><span>${escapeHtml(player.display_name)}</span><span class="badge">${player.finish_place ? `#${player.finish_place}` : "Racing…"}</span></li>`).join("")}</ol>
+          <article class="card"><h3>Room results</h3><ol class="list">${standings().map((row, index) => `
+            <li class="list-item"><span class="player-name"><span class="avatar" style="--avatar:${row.color}"></span>${escapeHtml(row.name)}${row.you ? ' <span class="badge">YOU</span>' : ""}${row.bot ? ' <span class="badge">BOT</span>' : ""}</span>
+              <span class="badge">${row.time === null ? "Racing…" : `#${index + 1} · ${row.time.toFixed(1)}s`}</span></li>`).join("")}</ol>
           </article>
           <article class="card"><h3>Keep playing</h3><p class="hint">Use the coins in your profile to buy buffs. Stat points improve Speed or Jump.</p>
             <button class="button button-secondary" data-action="profile">Open profile & shop</button>

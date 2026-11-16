@@ -35,3 +35,32 @@ export function getPlayerPosition(progress, y, name, color, jumping = false) {
     jumping,
   };
 }
+
+// ---------- Bots ----------
+// Bot speeds come from the race start time, so every player in the room (and the
+// server, see public.bot_speed in schema.sql) works out exactly the same bots.
+export const MAX_RACERS = 15;
+export const BOT_NAMES = [
+  "Bolt", "Pixel", "Zippy", "Echo", "Rex", "Nimbus", "Blip",
+  "Turbo", "Kiwi", "Jinx", "Dash", "Momo", "Fizz", "Ziggy",
+];
+
+export function raceSeed(raceStartedAt) {
+  return Math.floor(Date.parse(raceStartedAt) / 1000) % 100000;
+}
+
+export function botSpeed(seed, botIndex) {
+  return 190 + ((seed * 7919 + (botIndex + 1) * 104729) % 111);
+}
+
+export function botFinishSeconds(seed, botIndex) {
+  return TRACK_LENGTH / botSpeed(seed, botIndex);
+}
+
+export function botProgress(seed, botIndex, elapsedSeconds) {
+  return Math.max(0, Math.min(TRACK_LENGTH, botSpeed(seed, botIndex) * elapsedSeconds));
+}
+
+export function maxBots(humanCount) {
+  return Math.max(0, MAX_RACERS - humanCount);
+}
