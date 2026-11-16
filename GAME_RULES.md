@@ -16,7 +16,7 @@ files are not included or modified.
 - Each race has eight coin pickups worth 100 coins each.
 - Every finisher earns 500 coins, plus the value of coins collected.
 - A Double Coins buff doubles those race earnings.
-- First place earns 1 stat point, second place earns 2, and third place earns 3.
+- First place earns 3 stat points, second place earns 2, and third place earns 1.
 - Players spend stat points on Speed or Jump in their profile.
 - Each new profile starts with 1,000 coins.
 
