@@ -8,6 +8,7 @@ import {
   BOT_NAMES,
   MAX_RACERS,
   botFinishSeconds,
+  botSpeed,
   botProgress,
   getRaceStats,
   maxBots,
@@ -719,7 +720,7 @@ function renderRace() {
           <div><p class="eyebrow">Multiplayer race · Room ${escapeHtml(state.room.code)}</p><h2>Run your own line.</h2></div>
           <span class="coin-pill">✦ ${state.runner.pickups} pickups</span>
         </div>
-        <p class="hint">Tap, click, press Space, or use ↑ to jump over blocks. Pick up coins as you race.</p>
+        <p class="hint">Tap, click, press Space, or use ↑ to jump over spikes. Pick up coins as you race.</p>
         <div class="game-wrap">
           <canvas class="game-canvas" id="race-canvas" tabindex="0" aria-label="Neon Dash race. Press Space or click to jump."></canvas>
           <div class="game-controls"><span class="race-status" id="race-status">Ready, set, run!</span><span>✦ ${state.runner.pickups} / ${COIN_POSITIONS.length} coins · ${Math.max(0, Math.ceil(INVINCIBILITY_SECONDS - (performance.now() - state.runner.startTime) / 1000))}s shield</span></div>
@@ -751,10 +752,11 @@ function roundedRect(context, x, y, width, height, radius) {
   context.roundRect(x, y, width, height, radius);
 }
 
-function drawAvatar(context, actor, x, y, size) {
+function drawAvatar(context, actor, x, y, size, rotation = 0) {
   const c = actor.character ?? character(actor.character_id);
   context.save();
   context.translate(x, y);
+  if (rotation) context.rotate(rotation);
   context.shadowColor = c.color;
   context.shadowBlur = 17;
   context.fillStyle = c.color;
@@ -802,16 +804,21 @@ function drawAvatar(context, actor, x, y, size) {
   context.restore();
 }
 
-function drawObstacle(context, x, y, width, height, color = "#ff8290") {
-  context.shadowColor = color;
-  context.shadowBlur = 12;
-  context.fillStyle = color;
-  context.strokeStyle = "#ffe4ec";
-  context.lineWidth = 1.5;
-  roundedRect(context, x, y - height, width, height, 5);
+function drawSpike(context, x, ground, size) {
+  context.save();
+  context.shadowColor = "#ff5d8f";
+  context.shadowBlur = 14;
+  context.fillStyle = "#1a0f24";
+  context.strokeStyle = "#ff7aa8";
+  context.lineWidth = 2.5;
+  context.beginPath();
+  context.moveTo(x - size / 2, ground);
+  context.lineTo(x, ground - size);
+  context.lineTo(x + size / 2, ground);
+  context.closePath();
   context.fill();
   context.stroke();
-  context.shadowBlur = 0;
+  context.restore();
 }
 
 function drawCoin(context, x, y) {
@@ -827,140 +834,173 @@ function drawCoin(context, x, y) {
   context.shadowBlur = 0;
 }
 
+// Jump phase (0..1) for a runner that auto-jumps every spike, used for bots.
+function autoJumpPhase(progress, speed) {
+  const halfJump = (speed * JUMP_DURATION) / 2;
+  for (const spike of OBSTACLE_POSITIONS) {
+    const distance = progress - (spike - halfJump);
+    if (distance >= 0 && distance <= halfJump * 2) return distance / (halfJump * 2);
+  }
+  return null;
+}
+
+const DEFAULT_JUMP_HEIGHT = 120;
+
 function drawRace(canvas, now) {
   const context = canvas.getContext("2d");
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   if (width <= 0 || height <= 0) return;
-  context.clearRect(0, 0, width, height);
-  const background = context.createLinearGradient(0, 0, 0, height);
-  background.addColorStop(0, "#111b33");
-  background.addColorStop(1, "#1a2850");
-  context.fillStyle = background;
-  context.fillRect(0, 0, width, height);
+  const local = state.runner;
+  const scale = Math.max(0.75, Math.min(1.35, height / 380));
+  const unitsPerPixel = 1550 / Math.max(1, width - 40);
+  const runnerX = Math.min(170, width * 0.24);
+  const ground = height - Math.round(56 * scale);
+  const worldX = (world) => runnerX + (world - local.progress) / unitsPerPixel;
+  const scroll = local.progress / unitsPerPixel;
 
-  for (let dot = 0; dot < 70; dot += 1) {
-    const x = (dot * 131 + 37) % width;
-    const y = (dot * 79 + 23) % Math.max(1, height * 0.62);
-    context.fillStyle = dot % 4 === 0 ? "#72f2c477" : "#b9d1ff44";
-    context.fillRect(x, y, 2, 2);
+  // Sky + scrolling grid (parallax)
+  const sky = context.createLinearGradient(0, 0, 0, height);
+  sky.addColorStop(0, "#1b1140");
+  sky.addColorStop(0.6, "#122a5c");
+  sky.addColorStop(1, "#0d1a3a");
+  context.fillStyle = sky;
+  context.fillRect(0, 0, width, height);
+  const cell = 46 * scale;
+  context.strokeStyle = "#ffffff10";
+  context.lineWidth = 1;
+  const gridOffset = (scroll * 0.25) % cell;
+  for (let x = -gridOffset; x < width; x += cell) {
+    context.beginPath(); context.moveTo(x, 0); context.lineTo(x, ground); context.stroke();
+  }
+  for (let y = ground - cell; y > 0; y -= cell) {
+    context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke();
   }
 
-  const local = state.runner;
+  // Floor: tiled blocks
+  context.fillStyle = "#0a1430";
+  context.fillRect(0, ground, width, height - ground);
+  context.strokeStyle = "#72f2c4";
+  context.lineWidth = 3;
+  context.shadowColor = "#72f2c4";
+  context.shadowBlur = 12;
+  context.beginPath(); context.moveTo(0, ground); context.lineTo(width, ground); context.stroke();
+  context.shadowBlur = 0;
+  const tile = 40 * scale;
+  context.strokeStyle = "#72f2c42a";
+  context.lineWidth = 1.5;
+  for (let x = -(scroll % tile); x < width; x += tile) {
+    context.strokeRect(x + 2, ground + 4, tile - 4, height - ground - 8);
+  }
+
+  // Finish line
+  const finishX = worldX(TRACK_LENGTH);
+  if (finishX < width + 20) {
+    for (let y = 0; y < ground; y += 14) {
+      context.fillStyle = (Math.floor(y / 14) % 2) ? "#ffffff" : "#111827";
+      context.fillRect(finishX, y, 10, 14);
+    }
+  }
+
+  // Spikes and coins
+  const spikeSize = 30 * scale;
+  OBSTACLE_POSITIONS.forEach((world, index) => {
+    const x = worldX(world);
+    if (x < -40 || x > width + 40) return;
+    drawSpike(context, x, ground, spikeSize);
+    if (index % 2) drawSpike(context, x + spikeSize * 0.9, ground, spikeSize * 0.85);
+  });
+  COIN_POSITIONS.forEach((world, index) => {
+    const x = worldX(world);
+    if (x > -20 && x < width + 20 && !local.collected.has(index)) drawCoin(context, x, ground - 70 * scale);
+  });
+
+  // Everyone else on the same track: other players + bots as ghosts
   const elapsed = raceElapsedSeconds();
   const seed = state.room?.race_started_at ? raceSeed(state.room.race_started_at) : 0;
   const others = [
-    ...state.players.filter((player) => player.user_id !== state.user.id).map((player) => ({
-      progress: state.remoteRunners.get(player.user_id)?.progress ?? (player.finish_place ? TRACK_LENGTH : 0),
-      character: character(player.character_id),
-      name: player.display_name,
-    })),
-    ...bots().map((bot) => ({
-      progress: botProgress(seed, bot.index, elapsed),
-      character: bot.character,
-      name: bot.name,
-    })),
+    ...state.players.filter((player) => player.user_id !== state.user.id).map((player) => {
+      const remote = state.remoteRunners.get(player.user_id);
+      return {
+        progress: remote?.progress ?? (player.finish_place ? TRACK_LENGTH : 0),
+        jump: typeof remote?.jump === "number" ? remote.jump : null,
+        character: character(player.character_id),
+        name: player.display_name,
+      };
+    }),
+    ...bots().map((bot) => {
+      const progress = botProgress(seed, bot.index, elapsed);
+      return {
+        progress,
+        jump: progress < TRACK_LENGTH ? autoJumpPhase(progress, botSpeed(seed, bot.index)) : null,
+        character: bot.character,
+        name: bot.name,
+      };
+    }),
   ];
-  const viewDistance = 1550;
-  const runnerX = Math.min(155, width * 0.2);
-  const myName = state.profile.display_name;
-
-  if (others.length <= 3) {
-    // Few racers: one lane each.
-    const lanes = [local, ...others];
-    const laneHeight = (height - 44) / lanes.length;
-    lanes.forEach((runner, lane) => {
-      const top = 18 + lane * laneHeight;
-      const ground = top + laneHeight - 12;
-      context.fillStyle = lane === 0 ? "#1d3150" : "#172541";
-      roundedRect(context, 12, top, width - 24, laneHeight - 8, 10);
-      context.fill();
-      context.fillStyle = "#72f2c466";
-      context.fillRect(22, ground, width - 44, 2);
-      context.font = "12px 'DM Mono', monospace";
-      context.textAlign = "left"; context.textBaseline = "top";
-      context.fillStyle = "#c8d3e8";
-      context.fillText(runner.name ?? myName, 26, top + 8);
-      const progress = runner.progress ?? 0;
-      const worldX = (world) => runnerX + ((world - progress) / viewDistance) * (width - runnerX - 40);
-      OBSTACLE_POSITIONS.forEach((world, index) => {
-        const x = worldX(world);
-        if (x > 12 && x < width - 12) drawObstacle(context, x, ground, 20, 15 + (index % 2) * 7);
-      });
-      COIN_POSITIONS.forEach((world, index) => {
-        const x = worldX(world);
-        if (x > 12 && x < width - 12 && (lane !== 0 || !local.collected.has(index))) drawCoin(context, x, ground - 35);
-      });
-      if (lane === 0) {
-        drawLocalRunner(context, local, runnerX, ground, now);
-      } else {
-        drawAvatar(context, runner, runnerX, ground - 17, 13);
-      }
-    });
-  } else {
-    // Lots of racers: one shared track, everyone else as ghosts, plus a progress strip.
-    const stripLeft = 26;
-    const stripRight = width - 120;
-    const stripY = 22;
-    context.strokeStyle = "#72f2c455";
-    context.lineWidth = 3;
-    context.beginPath(); context.moveTo(stripLeft, stripY); context.lineTo(stripRight, stripY); context.stroke();
-    const stripX = (progress) => stripLeft + (stripRight - stripLeft) * (progress / TRACK_LENGTH);
-    others.forEach((runner) => {
-      context.fillStyle = runner.character.color;
-      context.globalAlpha = 0.85;
-      context.beginPath(); context.arc(stripX(runner.progress), stripY, 4, 0, Math.PI * 2); context.fill();
-    });
-    context.globalAlpha = 1;
-    context.fillStyle = local.character.color;
-    context.strokeStyle = "#ffffff";
-    context.lineWidth = 2;
-    context.beginPath(); context.arc(stripX(local.progress), stripY, 6, 0, Math.PI * 2); context.fill(); context.stroke();
-
-    const top = 44;
-    const ground = height - 26;
-    context.fillStyle = "#1d3150";
-    roundedRect(context, 12, top, width - 24, height - top - 12, 12);
-    context.fill();
-    context.fillStyle = "#72f2c466";
-    context.fillRect(22, ground, width - 44, 2);
-    const worldX = (world) => runnerX + ((world - local.progress) / viewDistance) * (width - runnerX - 40);
-    OBSTACLE_POSITIONS.forEach((world, index) => {
-      const x = worldX(world);
-      if (x > 12 && x < width - 12) drawObstacle(context, x, ground, 22, 18 + (index % 2) * 8);
-    });
-    COIN_POSITIONS.forEach((world, index) => {
-      const x = worldX(world);
-      if (x > 12 && x < width - 12 && !local.collected.has(index)) drawCoin(context, x, ground - 40);
-    });
-    context.font = "11px 'DM Mono', monospace";
-    context.textAlign = "center"; context.textBaseline = "bottom";
-    others.forEach((runner, index) => {
-      const x = worldX(runner.progress);
-      if (x < 16 || x > width - 16) return;
-      const lift = (index % 3) * 12;
-      context.globalAlpha = 0.42;
-      drawAvatar(context, runner, x, ground - 17 - lift, 14);
-      context.globalAlpha = 0.75;
-      context.fillStyle = "#c8d3e8";
-      context.fillText(runner.name, x, ground - 36 - lift);
-    });
-    context.globalAlpha = 1;
-    drawLocalRunner(context, local, runnerX, ground, now, 17);
-  }
-
-  const position = 1 + others.filter((runner) => runner.progress > local.progress).length;
-  context.fillStyle = "#d9e6ff";
-  context.font = "12px 'DM Mono', monospace";
-  context.textAlign = "right"; context.textBaseline = "top";
-  context.fillText(`P${position}/${others.length + 1} · ${Math.floor(Math.min(100, local.progress / TRACK_LENGTH * 100))}%`, width - 20, 14);
-}
-
-function drawLocalRunner(context, local, x, ground, now, size = 15) {
+  const size = 15 * scale;
+  context.font = `${Math.round(11 * scale)}px 'DM Mono', monospace`;
+  context.textAlign = "center"; context.textBaseline = "bottom";
   const jumping = now < local.jumpingUntil;
-  const jumpPhase = jumping ? (now - local.jumpOrigin) / (local.jumpingUntil - local.jumpOrigin) : 0;
-  const jumpOffset = jumping ? Math.sin(Math.PI * jumpPhase) * local.stats.jumpHeight : 0;
-  drawAvatar(context, local, x, ground - 17 - jumpOffset, size);
+  const phase = jumping ? (now - local.jumpOrigin) / (local.jumpingUntil - local.jumpOrigin) : 0;
+  const myLift = jumping ? Math.sin(Math.PI * phase) * local.stats.jumpHeight * scale : 0;
+  // Name tags skip any spot that would overlap a tag already placed (YOU first).
+  const tags = [];
+  const tagFits = (x, y, label) => {
+    const half = context.measureText(label).width / 2 + 4;
+    if (tags.some((tag) => Math.abs(tag.x - x) < tag.half + half && Math.abs(tag.y - y) < 14)) return false;
+    tags.push({ x, y, half });
+    return true;
+  };
+  const myTagY = ground - size * 2.4 - 8 - myLift;
+  tagFits(runnerX, myTagY, "YOU");
+  const placed = others.map((runner) => {
+    const x = worldX(runner.progress);
+    const lift = runner.jump === null ? 0 : Math.sin(Math.PI * runner.jump) * DEFAULT_JUMP_HEIGHT * scale;
+    return { runner, x, lift };
+  }).filter(({ x }) => x > -30 && x < width + 30)
+    .sort((a, b) => Math.abs(a.x - runnerX) - Math.abs(b.x - runnerX));
+  placed.forEach(({ runner, x, lift }) => {
+    const spin = runner.jump === null ? 0 : runner.jump * Math.PI;
+    context.globalAlpha = 0.45;
+    drawAvatar(context, runner, x, ground - size - 2 - lift, size, spin);
+  });
+  context.globalAlpha = 0.8;
+  context.fillStyle = "#d5def0";
+  placed.forEach(({ runner, x, lift }) => {
+    const label = runner.name.replace(/ \(bot\)$/, "");
+    const y = ground - size * 2 - 8 - lift;
+    if (tagFits(x, y, label)) context.fillText(label, x, y);
+  });
+  context.globalAlpha = 1;
+
+  // You
+  drawAvatar(context, local, runnerX, ground - size * 1.15 - 2 - myLift, size * 1.15, jumping ? phase * Math.PI : 0);
+  context.fillStyle = "#72f2c4";
+  context.fillText("YOU", runnerX, myTagY);
+
+  // Progress strip + position
+  const stripLeft = 20;
+  const stripRight = width - 130;
+  const stripY = 18;
+  const stripX = (progress) => stripLeft + (stripRight - stripLeft) * (progress / TRACK_LENGTH);
+  context.fillStyle = "#ffffff22";
+  roundedRect(context, stripLeft, stripY - 3, stripRight - stripLeft, 6, 3);
+  context.fill();
+  context.fillStyle = "#72f2c4";
+  roundedRect(context, stripLeft, stripY - 3, Math.max(6, stripX(local.progress) - stripLeft), 6, 3);
+  context.fill();
+  others.forEach((runner) => {
+    context.fillStyle = runner.character.color;
+    context.beginPath(); context.arc(stripX(runner.progress), stripY, 4, 0, Math.PI * 2); context.fill();
+  });
+  context.fillStyle = "#ffffff";
+  context.beginPath(); context.arc(stripX(local.progress), stripY, 6, 0, Math.PI * 2); context.fill();
+  const position = 1 + others.filter((runner) => runner.progress > local.progress).length;
+  context.font = "bold 13px 'DM Mono', monospace";
+  context.textAlign = "right"; context.textBaseline = "middle";
+  context.fillStyle = "#ffffff";
+  context.fillText(`P${position}/${others.length + 1} · ${Math.floor(Math.min(100, local.progress / TRACK_LENGTH * 100))}%`, width - 16, stripY);
 }
 
 async function finishRace() {
@@ -1018,7 +1058,7 @@ function tickRace(now, canvas) {
   OBSTACLE_POSITIONS.forEach((obstacle, index) => {
     if (oldProgress < obstacle && runner.progress >= obstacle && !jumpActive && !shieldActive) {
       runner.slowUntil = now + 800;
-      setNotice("Bumped a block! Jump over the next one.");
+      setNotice("Hit a spike! Jump over the next one.");
       window.setTimeout(() => setNotice(""), 1700);
     }
     if (oldProgress < obstacle && runner.progress >= obstacle && shieldActive) {
@@ -1039,7 +1079,11 @@ function tickRace(now, canvas) {
     void subscription.send({
       type: "broadcast",
       event: "runner",
-      payload: { user_id: state.user.id, progress: runner.progress },
+      payload: {
+        user_id: state.user.id,
+        progress: runner.progress,
+        jump: now < runner.jumpingUntil ? (now - runner.jumpOrigin) / (runner.jumpingUntil - runner.jumpOrigin) : null,
+      },
     });
   }
   if (!runner.finished && !runner.progressRequest && now - (runner.lastServerUpdate ?? 0) > 400) {
