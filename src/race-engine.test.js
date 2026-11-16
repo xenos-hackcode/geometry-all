@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { getAward, getRaceStats, TRACK_LENGTH } from "./race-engine.js";
 
 test("finishing awards participation coins and podium stat points", () => {
-  assert.deepEqual(getAward(1, 2), { coinReward: 700, statPoints: 1 });
+  assert.deepEqual(getAward(1, 2), { coinReward: 700, statPoints: 3 });
   assert.deepEqual(getAward(2, 0), { coinReward: 500, statPoints: 2 });
-  assert.deepEqual(getAward(3, 1), { coinReward: 600, statPoints: 3 });
+  assert.deepEqual(getAward(3, 1), { coinReward: 600, statPoints: 1 });
   assert.deepEqual(getAward(4, 0), { coinReward: 500, statPoints: 0 });
 });
 
 test("double-coins buff doubles race earnings", () => {
-  assert.deepEqual(getAward(1, 2, true), { coinReward: 1400, statPoints: 1 });
+  assert.deepEqual(getAward(1, 2, true), { coinReward: 1400, statPoints: 3 });
 });
 
 test("permanent and temporary buffs affect the intended stats", () => {

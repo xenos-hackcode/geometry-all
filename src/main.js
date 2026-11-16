@@ -159,7 +159,7 @@ function renderSetup() {
         <div class="card">
           <h3>Configure the project</h3>
           <ol class="hint">
-            <li>Create a Supabase project and run <code>supabase/schema.sql</code> in its SQL Editor.</li>
+            <li>Create a Supabase project and run <code>schema.sql</code> in its SQL Editor.</li>
             <li>Enable anonymous sign-ins in Authentication settings.</li>
             <li>Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in your local <code>.env.local</code> and Vercel project settings.</li>
             <li>Build and deploy. Your classmates can then share six-character room codes.</li>
@@ -180,7 +180,7 @@ function renderError(message) {
         <p class="eyebrow">Connection issue</p>
         <h1>Could not enter the game</h1>
         <div class="notice error">${escapeHtml(message)}</div>
-        <p class="hint">Check that Supabase is configured, anonymous sign-in is enabled, and <code>supabase/schema.sql</code> has been run.</p>
+        <p class="hint">Check that Supabase is configured, anonymous sign-in is enabled, and <code>schema.sql</code> has been run.</p>
         <button class="button button-secondary" id="retry">Try again</button>
       </section>
     </div>`;
@@ -863,7 +863,7 @@ function renderProfile() {
       <div class="stat"><span class="eyebrow">Jump</span><span class="stat-value">${profile.jump_stat}/10</span></div>
     </div>
     <div class="grid">
-      <article class="card"><h3>Spend stat points</h3><p class="hint">Race placement gives 1 point for 1st, 2 for 2nd, 3 for 3rd. Stats cap at 10.</p>
+      <article class="card"><h3>Spend stat points</h3><p class="hint">Race placement gives 3 points for 1st, 2 for 2nd, 1 for 3rd. Stats cap at 10.</p>
         <div class="button-row"><button class="button button-secondary button-small" data-upgrade="speed" ${profile.stat_points < 1 || profile.speed_stat >= 10 ? "disabled" : ""}>+1 Speed</button>
         <button class="button button-secondary button-small" data-upgrade="jump" ${profile.stat_points < 1 || profile.jump_stat >= 10 ? "disabled" : ""}>+1 Jump</button></div>
       </article>

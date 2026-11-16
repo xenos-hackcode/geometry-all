@@ -5,7 +5,7 @@ redistribution of the downloaded Geometry Vibes game.
 
 ## Run locally
 
-1. Create a Supabase project and run [`supabase/schema.sql`](supabase/schema.sql)
+1. Create a Supabase project and run [`schema.sql`](schema.sql)
    in its SQL editor.
 2. In Supabase Authentication settings, enable anonymous sign-ins.
 3. Copy `.env.example` to `.env.local` and fill in the project URL and the

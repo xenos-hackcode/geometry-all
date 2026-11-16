@@ -22,7 +22,7 @@ export function getRaceStats(profile, activeBuffs = []) {
 
 export function getAward(place, pickups, doubleCoins = false) {
   const coinReward = (500 + Math.max(0, pickups) * COIN_VALUE) * (doubleCoins ? 2 : 1);
-  const statPoints = place === 1 ? 1 : place === 2 ? 2 : place === 3 ? 3 : 0;
+  const statPoints = place === 1 ? 3 : place === 2 ? 2 : place === 3 ? 1 : 0;
   return { coinReward, statPoints };
 }
 

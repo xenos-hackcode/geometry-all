@@ -389,7 +389,7 @@ begin
     when 'double_coins' = any(member.active_buffs) then 2
     else 1 end;
   prize := (500 + collected_coins * 100) * multiplier;
-  points := case placement when 1 then 1 when 2 then 2 when 3 then 3 else 0 end;
+  points := case placement when 1 then 3 when 2 then 2 when 3 then 1 else 0 end;
   update public.room_members set finish_place = placement
     where room_id = selected_room.id and user_id = auth.uid();
   update public.profiles set coins = coins + prize, stat_points = stat_points + points,
