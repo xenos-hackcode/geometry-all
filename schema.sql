@@ -55,10 +55,26 @@ returns integer language sql immutable set search_path = '' as $$
   select (190 + ((seed * 7919 + (bot_index + 1) * 41) % 111))::integer
 $$;
 
+-- Bots crash a few times at hazards picked from the race seed, then do a clean run at
+-- the base speed (312 units/s). Keep in sync with botAttempts in src/level.js.
+create or replace function public.bot_finish_seconds(seed bigint, bot_index integer)
+returns double precision language plpgsql immutable set search_path = '' as $$
+declare hazards integer[] := array[435, 615, 765, 795, 1275, 1455, 1665, 1695, 1725, 1965, 2055, 2505, 2535, 2565, 2595, 2625, 2925, 3015, 3225, 3255, 3285, 3465, 3495, 3675, 3855, 3885, 4035, 4365, 4395, 4425, 4455, 4485, 4515, 4545, 4755, 4785, 4965, 5175, 5295, 5325, 5565, 5685, 5715];
+declare fails integer := ((seed * 13 + (bot_index + 1) * 29) % 8)::integer;
+declare total double precision := 0;
+declare attempt integer;
+begin
+  for attempt in 0 .. fails - 1 loop
+    total := total + hazards[((seed * 7 + (bot_index + 1) * 31 + attempt * 17) % cardinality(hazards))::integer + 1]::double precision / 312 + 0.8;
+  end loop;
+  return total + 6000.0 / 312;
+end;
+$$;
+
 create or replace function public.bots_finished_by(bot_count integer, started timestamptz, at_time timestamptz)
 returns integer language sql stable set search_path = '' as $$
   select count(*)::integer from generate_series(0, bot_count - 1) as bots(i)
-  where started + make_interval(secs => 6000.0 / public.bot_speed(public.race_seed(started), bots.i)) <= at_time
+  where started + make_interval(secs => public.bot_finish_seconds(public.race_seed(started), bots.i)) <= at_time
 $$;
 
 alter table public.profiles enable row level security;
@@ -362,7 +378,15 @@ begin
   select * into member from public.room_members
     where room_id = selected_room.id and user_id = auth.uid() for update;
   if not found then raise exception 'You are not in this room'; end if;
-  if new_progress < member.race_progress then raise exception 'Race progress cannot go backwards'; end if;
+  if new_progress < member.race_progress then
+    -- Crashing sends you back to the start and wipes that attempt's coins.
+    if new_progress <> 0 or coalesce(cardinality(new_coin_indices), 0) > 0 then
+      raise exception 'Race progress cannot go backwards';
+    end if;
+    update public.room_members set race_progress = 0, collected_coin_indices = '{}'
+      where room_id = selected_room.id and user_id = auth.uid();
+    return;
+  end if;
   if new_progress > floor(extract(epoch from (now() - selected_room.race_started_at)) * 650 + 100)::integer then
     raise exception 'Race progress is faster than the maximum game speed';
   end if;

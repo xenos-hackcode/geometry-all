@@ -15,9 +15,21 @@ files are not included or modified.
 - Every cosmetic character is unlocked from the start.
 - A guest profile is created per browser the first time someone plays.
 
+## How a race plays
+
+- Everyone runs on the same level at the same time. Your cube moves forward on its
+  own; tap or hold to jump (Space and ↑ work too).
+- You can land on top of blocks. Touching a spike or running into the side of a
+  block crashes you and sends you back to 0% for a new attempt.
+- Yellow pads launch you high. Tap while inside a yellow ring to jump in mid-air.
+- Coins only count from the attempt that reaches the finish.
+- Bots crash a few times too, then make a clean run.
+- Speed and Jump upgrades only nudge your speed and jump height a little (at most
+  about +21% speed and +19% jump), so the level plays the same for everyone.
+
 ## Race and rewards
 
-- Each race has eight coin pickups worth 100 coins each.
+- Each race has eight coin pickups worth 100 coins each (some need a well-timed jump).
 - Every finisher earns 500 coins, plus the value of coins collected.
 - A Double Coins buff doubles those race earnings.
 - First place earns 3 stat points, second place earns 2, and third place earns 1.

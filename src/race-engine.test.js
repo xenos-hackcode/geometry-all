@@ -13,36 +13,71 @@ test("double-coins buff doubles race earnings", () => {
   assert.deepEqual(getAward(1, 2, true), { coinReward: 1400, statPoints: 3 });
 });
 
-test("permanent and temporary buffs affect the intended stats", () => {
+test("upgrades only nudge the fixed speed and jump", () => {
   const base = getRaceStats({ speed_stat: 0, jump_stat: 0 });
-  const boosted = getRaceStats(
-    { speed_stat: 2, jump_stat: 3 },
-    ["speed", "jump_temp", "shield", "double_coins_temp"],
+  const maxed = getRaceStats(
+    { speed_stat: 10, jump_stat: 10 },
+    ["speed", "speed_temp", "jump", "jump_temp", "shield", "double_coins_temp"],
   );
-  assert.equal(base.speed, 230);
-  assert.equal(base.jumpHeight, 112);
-  assert.equal(boosted.speed, (230 + 2 * 12) * 1.25);
-  assert.equal(boosted.jumpHeight, (112 + 3 * 8) * 1.25);
-  assert.equal(boosted.invincible, true);
-  assert.equal(boosted.doubleCoins, true);
+  assert.equal(base.speed, 312);
+  assert.equal(base.jumpMult, 1);
+  assert.ok(maxed.speed < 312 * 1.22);
+  assert.ok(maxed.jumpMult < 1.2);
+  assert.equal(maxed.invincible, true);
+  assert.equal(maxed.doubleCoins, true);
 });
 
 test("race has a fixed positive finish distance", () => {
   assert.equal(TRACK_LENGTH, 6000);
 });
 
-import { botSpeed, botFinishSeconds, botProgress, maxBots, raceSeed } from "./race-engine.js";
+import { readFileSync } from "node:fs";
+import { maxBots, raceSeed } from "./race-engine.js";
+import {
+  BASE_SPEED, HAZARD_X, LEVEL, botAttempts, botFinishSeconds, botState, newRunnerBody,
+  recordRun, solveLevel, stepBody,
+} from "./level.js";
 
-test("bots are deterministic and race at a fair speed", () => {
+test("the level can be beaten with no upgrades and with every upgrade maxed", () => {
+  const maxed = getRaceStats({ speed_stat: 10, jump_stat: 10 }, ["speed", "speed_temp", "jump", "jump_temp"]);
+  for (const [speed, jumpMult] of [[BASE_SPEED, 1], [maxed.speed, 1], [BASE_SPEED, maxed.jumpMult], [maxed.speed, maxed.jumpMult]]) {
+    const presses = solveLevel(speed, jumpMult);
+    assert.ok(presses, `unbeatable at speed ${speed} jump ${jumpMult}`);
+    assert.equal(recordRun(presses, speed, jumpMult).at(-1).x, TRACK_LENGTH);
+  }
+});
+
+test("touching a spike or running into a block side crashes you", () => {
+  const body = newRunnerBody();
+  while (!body.dead && body.x < TRACK_LENGTH) stepBody(body, false);
+  assert.equal(body.dead, true);
+  assert.ok(body.x < LEVEL.spikes[0].x + 15);
+});
+
+test("a shield lets you run through hazards", () => {
+  const body = newRunnerBody();
+  for (let step = 0; step < 2000 && body.x < TRACK_LENGTH; step += 1) stepBody(body, false, BASE_SPEED, 1, { invincible: true });
+  assert.equal(body.dead, false);
+});
+
+test("bots are deterministic, crash a few times, then finish", () => {
   const seed = raceSeed("2026-11-16T11:34:12.123456+00:00");
   assert.equal(seed, raceSeed("2026-11-16T11:34:12.999+00:00"));
   for (let bot = 0; bot < 14; bot += 1) {
-    const speed = botSpeed(seed, bot);
-    assert.ok(speed >= 190 && speed <= 300);
-    assert.equal(botSpeed(seed, bot), speed);
+    const attempts = botAttempts(seed, bot);
+    assert.ok(attempts.length >= 1 && attempts.length <= 8);
+    const finish = botFinishSeconds(seed, bot);
+    assert.ok(finish >= TRACK_LENGTH / BASE_SPEED);
+    assert.equal(botState(seed, bot, finish + 1).x, TRACK_LENGTH);
+    assert.equal(botState(seed, bot, 0).x, 0);
   }
-  assert.equal(botProgress(seed, 0, 0), 0);
-  assert.equal(botProgress(seed, 0, botFinishSeconds(seed, 0) + 5), TRACK_LENGTH);
+});
+
+test("bot hazards in schema.sql match the level", () => {
+  const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
+  const match = schema.match(/hazards integer\[\] := array\[([^\]]+)\]/);
+  assert.ok(match, "schema.sql is missing the bot hazard list");
+  assert.deepEqual(match[1].split(",").map((value) => Number(value.trim())), HAZARD_X);
 });
 
 test("rooms hold 15 racers including bots", () => {

@@ -5,16 +5,17 @@ export const OBSTACLE_POSITIONS = [700, 1350, 2050, 2750, 3500, 4300, 5100, 5750
 export const JUMP_DURATION = 0.82;
 export const INVINCIBILITY_SECONDS = 30;
 
+// Upgrades only nudge the fixed Geometry Dash-style speed and jump (max about +21% / +19%).
+export const BASE_RUN_SPEED = 312;
+
 export function getRaceStats(profile, activeBuffs = []) {
   const owned = new Set(activeBuffs);
-  const permanentSpeed = owned.has("speed") ? 1.25 : 1;
-  const permanentJump = owned.has("jump") ? 1.2 : 1;
-
+  const speedStat = Math.max(0, Math.min(profile.speed_stat ?? 0, 10));
+  const jumpStat = Math.max(0, Math.min(profile.jump_stat ?? 0, 10));
   return {
-    speed: (230 + Math.min(profile.speed_stat, 10) * 12) * permanentSpeed *
-      (owned.has("speed_temp") ? 1.3 : 1),
-    jumpHeight: (112 + Math.min(profile.jump_stat, 10) * 8) * permanentJump *
-      (owned.has("jump_temp") ? 1.25 : 1),
+    speed: BASE_RUN_SPEED * (1 + speedStat * 0.01) * (owned.has("speed") ? 1.05 : 1) *
+      (owned.has("speed_temp") ? 1.05 : 1),
+    jumpMult: (1 + jumpStat * 0.01) * (owned.has("jump") ? 1.04 : 1) * (owned.has("jump_temp") ? 1.04 : 1),
     invincible: owned.has("shield") || owned.has("shield_temp"),
     doubleCoins: owned.has("double_coins") || owned.has("double_coins_temp"),
   };
@@ -47,18 +48,6 @@ export const BOT_NAMES = [
 
 export function raceSeed(raceStartedAt) {
   return Math.floor(Date.parse(raceStartedAt) / 1000) % 100000;
-}
-
-export function botSpeed(seed, botIndex) {
-  return 190 + ((seed * 7919 + (botIndex + 1) * 41) % 111);
-}
-
-export function botFinishSeconds(seed, botIndex) {
-  return TRACK_LENGTH / botSpeed(seed, botIndex);
-}
-
-export function botProgress(seed, botIndex, elapsedSeconds) {
-  return Math.max(0, Math.min(TRACK_LENGTH, botSpeed(seed, botIndex) * elapsedSeconds));
 }
 
 export function maxBots(humanCount) {

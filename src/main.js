@@ -2,18 +2,24 @@ import { createClient } from "@supabase/supabase-js";
 import {
   COIN_POSITIONS,
   INVINCIBILITY_SECONDS,
-  JUMP_DURATION,
-  OBSTACLE_POSITIONS,
   TRACK_LENGTH,
   BOT_NAMES,
   MAX_RACERS,
-  botFinishSeconds,
-  botSpeed,
-  botProgress,
   getRaceStats,
   maxBots,
   raceSeed,
 } from "./race-engine.js";
+import {
+  BLOCK,
+  LEVEL,
+  PLAYER_SIZE,
+  RESPAWN_DELAY,
+  STEP,
+  botFinishSeconds,
+  botState,
+  newRunnerBody,
+  stepBody,
+} from "./level.js";
 import "./style.css";
 
 const CHARACTERS = [
@@ -672,15 +678,20 @@ function beginRace() {
     : [...(state.profile.permanent_buffs ?? []), ...(state.profile.temporary_buffs ?? []).map((buff) => `${buff}_temp`)];
   state.runner = {
     progress: 0,
+    best: 0,
+    body: newRunnerBody(),
+    held: false,
+    attempt: 1,
+    deadUntil: 0,
+    explosion: null,
+    accumulator: 0,
+    needsRestart: false,
     pickups: 0,
     collected: new Set(),
     savedCoinIndices: new Set(),
     progressRequest: null,
-    jumpingUntil: 0,
-    jumpOrigin: 0,
     lastFrame: performance.now(),
     lastBroadcast: 0,
-    slowUntil: 0,
     startTime: performance.now(),
     finished: false,
     place: null,
@@ -692,21 +703,28 @@ function beginRace() {
 }
 
 function bindCanvasInput(canvas) {
-  const jump = (event) => {
-    if (event) event.preventDefault();
-    if (state.screen !== "race" || !state.runner || state.runner.finished) return;
-    const now = performance.now();
-    if (now > state.runner.jumpingUntil) {
-      state.runner.jumpOrigin = now;
-      state.runner.jumpingUntil = now + JUMP_DURATION * 1000;
-    }
+  const setHeld = (held) => (event) => {
+    if (event?.cancelable) event.preventDefault();
+    if (state.screen !== "race" || !state.runner) return;
+    state.runner.held = held;
   };
-  canvas.addEventListener("pointerdown", jump);
-  const onKey = (event) => {
-    if (["Space", "ArrowUp", "KeyW"].includes(event.code) && state.screen === "race") jump(event);
+  canvas.addEventListener("pointerdown", setHeld(true));
+  canvas.addEventListener("pointerup", setHeld(false));
+  canvas.addEventListener("pointercancel", setHeld(false));
+  canvas.addEventListener("pointerleave", setHeld(false));
+  const jumpKeys = ["Space", "ArrowUp", "KeyW"];
+  const onKeyDown = (event) => {
+    if (jumpKeys.includes(event.code) && state.screen === "race") setHeld(true)(event);
   };
-  window.addEventListener("keydown", onKey);
-  removeCanvasKey = () => window.removeEventListener("keydown", onKey);
+  const onKeyUp = (event) => {
+    if (jumpKeys.includes(event.code)) setHeld(false)(event);
+  };
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  removeCanvasKey = () => {
+    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
+  };
   canvas.focus();
 }
 
@@ -717,13 +735,13 @@ function renderRace() {
       ${noticeMarkup()}
       <section class="panel">
         <div class="row" style="justify-content:space-between">
-          <div><p class="eyebrow">Multiplayer race · Room ${escapeHtml(state.room.code)}</p><h2>Run your own line.</h2></div>
+          <div><p class="eyebrow">Multiplayer race · Room ${escapeHtml(state.room.code)}</p><h2>Don't touch the spikes.</h2></div>
           <span class="coin-pill">✦ ${state.runner.pickups} pickups</span>
         </div>
-        <p class="hint">Tap, click, press Space, or use ↑ to jump over spikes. Pick up coins as you race.</p>
+        <p class="hint">Tap or hold to jump (Space / ↑ work too). Land on blocks, but hit a spike or a block's side and you crash back to 0%. Yellow pads launch you; tap inside a yellow ring to jump in mid-air.</p>
         <div class="game-wrap">
           <canvas class="game-canvas" id="race-canvas" tabindex="0" aria-label="Neon Dash race. Press Space or click to jump."></canvas>
-          <div class="game-controls"><span class="race-status" id="race-status">Ready, set, run!</span><span>✦ ${state.runner.pickups} / ${COIN_POSITIONS.length} coins · ${Math.max(0, Math.ceil(INVINCIBILITY_SECONDS - (performance.now() - state.runner.startTime) / 1000))}s shield</span></div>
+          <div class="game-controls"><span class="race-status" id="race-status">Attempt 1</span><span>✦ 0 / ${COIN_POSITIONS.length} coins</span></div>
         </div>
         <div class="button-row" style="margin-top:14px"><button class="button button-quiet button-small" data-action="leave-room">Leave race</button></div>
       </section>
@@ -752,16 +770,8 @@ function roundedRect(context, x, y, width, height, radius) {
   context.roundRect(x, y, width, height, radius);
 }
 
-function drawAvatar(context, actor, x, y, size, rotation = 0) {
-  const c = actor.character ?? character(actor.character_id);
-  context.save();
-  context.translate(x, y);
-  if (rotation) context.rotate(rotation);
-  context.shadowColor = c.color;
-  context.shadowBlur = 17;
-  context.fillStyle = c.color;
-  context.strokeStyle = "#f4fbff";
-  context.lineWidth = 2;
+function traceShape(context, shape, size) {
+  const c = { shape };
   context.beginPath();
   if (c.shape === "triangle") {
     context.moveTo(0, -size); context.lineTo(size, size * 0.8); context.lineTo(-size, size * 0.8); context.closePath();
@@ -792,159 +802,229 @@ function drawAvatar(context, actor, x, y, size, rotation = 0) {
   } else {
     context.moveTo(0, -size); context.lineTo(size * 0.85, 0); context.lineTo(0, size); context.lineTo(-size * 0.85, 0); context.closePath();
   }
-  context.fill();
-  context.stroke();
-  context.shadowBlur = 0;
-  context.fillStyle = "#152039";
-  context.beginPath(); context.arc(-size * 0.2, -size * 0.1, size * 0.09, 0, Math.PI * 2); context.fill();
-  context.beginPath(); context.arc(size * 0.2, -size * 0.1, size * 0.09, 0, Math.PI * 2); context.fill();
-  context.strokeStyle = "#152039";
-  context.lineWidth = 1.5;
-  context.beginPath(); context.arc(0, size * 0.08, size * 0.22, 0.2, Math.PI - 0.2); context.stroke();
-  context.restore();
 }
 
-function drawSpike(context, x, ground, size) {
+function drawCoin(context, x, y, radius = 9) {
   context.save();
-  context.shadowColor = "#ff5d8f";
-  context.shadowBlur = 14;
-  context.fillStyle = "#1a0f24";
-  context.strokeStyle = "#ff7aa8";
-  context.lineWidth = 2.5;
-  context.beginPath();
-  context.moveTo(x - size / 2, ground);
-  context.lineTo(x, ground - size);
-  context.lineTo(x + size / 2, ground);
-  context.closePath();
-  context.fill();
-  context.stroke();
-  context.restore();
-}
-
-function drawCoin(context, x, y) {
   context.shadowColor = "#ffd166";
   context.shadowBlur = 14;
   context.fillStyle = "#ffd166";
   context.strokeStyle = "#fff2bc";
   context.lineWidth = 2;
-  context.beginPath(); context.arc(x, y, 9, 0, Math.PI * 2); context.fill(); context.stroke();
-  context.fillStyle = "#875b18";
-  context.font = "bold 10px sans-serif";
-  context.textAlign = "center"; context.textBaseline = "middle"; context.fillText("✦", x, y + 0.5);
+  context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill(); context.stroke();
   context.shadowBlur = 0;
+  context.fillStyle = "#875b18";
+  context.font = `bold ${Math.round(radius * 1.1)}px sans-serif`;
+  context.textAlign = "center"; context.textBaseline = "middle";
+  context.fillText("✦", x, y + 0.5);
+  context.restore();
 }
 
-// Jump phase (0..1) for a runner that auto-jumps every spike, used for bots.
-function autoJumpPhase(progress, speed) {
-  const halfJump = (speed * JUMP_DURATION) / 2;
-  for (const spike of OBSTACLE_POSITIONS) {
-    const distance = progress - (spike - halfJump);
-    if (distance >= 0 && distance <= halfJump * 2) return distance / (halfJump * 2);
+// The player icon: a cube in your colour with your character's shape as the emblem.
+function drawCube(context, x, y, size, angle, characterInfo, alpha = 1) {
+  context.save();
+  context.globalAlpha = alpha;
+  context.translate(x, y);
+  context.rotate(angle);
+  const half = size / 2;
+  context.shadowColor = characterInfo.color;
+  context.shadowBlur = alpha === 1 ? 16 : 0;
+  context.fillStyle = characterInfo.color;
+  context.fillRect(-half, -half, size, size);
+  context.shadowBlur = 0;
+  context.lineWidth = Math.max(2, size * 0.08);
+  context.strokeStyle = "#0b1020";
+  context.strokeRect(-half, -half, size, size);
+  context.fillStyle = "#0b102055";
+  context.fillRect(-half * 0.62, -half * 0.62, size * 0.62, size * 0.62);
+  context.fillStyle = "#ffffff";
+  context.strokeStyle = "#0b1020";
+  context.lineWidth = 1.5;
+  traceShape(context, characterInfo.shape, size * 0.24);
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
+function drawExplosion(context, x, y, size, age, color) {
+  if (age > 0.6) return;
+  const t = age / 0.6;
+  context.save();
+  context.globalAlpha = 1 - t;
+  context.strokeStyle = color;
+  context.lineWidth = 3;
+  context.beginPath(); context.arc(x, y, size * (0.5 + t * 2.4), 0, Math.PI * 2); context.stroke();
+  context.fillStyle = color;
+  for (let piece = 0; piece < 10; piece += 1) {
+    const direction = (piece / 10) * Math.PI * 2 + 0.4;
+    const distance = size * (0.4 + t * 2.8) * (0.6 + (piece % 3) * 0.25);
+    const bit = size * 0.22 * (1 - t);
+    context.fillRect(x + Math.cos(direction) * distance - bit / 2, y + Math.sin(direction) * distance - bit / 2, bit, bit);
   }
-  return null;
+  context.restore();
 }
-
-const DEFAULT_JUMP_HEIGHT = 120;
 
 function drawRace(canvas, now) {
   const context = canvas.getContext("2d");
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   if (width <= 0 || height <= 0) return;
-  const local = state.runner;
-  const scale = Math.max(0.75, Math.min(1.35, height / 380));
-  const unitsPerPixel = 1550 / Math.max(1, width - 40);
-  const runnerX = Math.min(170, width * 0.24);
-  const ground = height - Math.round(56 * scale);
-  const worldX = (world) => runnerX + (world - local.progress) / unitsPerPixel;
-  const scroll = local.progress / unitsPerPixel;
+  const runner = state.runner;
+  const body = runner.body;
+  const scale = height / (BLOCK * 9.5);
+  const groundY = height - BLOCK * 1.7 * scale;
+  const camX = body.x - (width * 0.3) / scale;
+  const sx = (x) => (x - camX) * scale;
+  const sy = (y) => groundY - y * scale;
+  const visible = (x, margin = 60) => sx(x) > -margin && sx(x) < width + margin;
 
-  // Sky + scrolling grid (parallax)
-  const sky = context.createLinearGradient(0, 0, 0, height);
-  sky.addColorStop(0, "#1b1140");
-  sky.addColorStop(0.6, "#122a5c");
-  sky.addColorStop(1, "#0d1a3a");
+  // Background colour drifts as you go, with big faint squares scrolling slowly behind.
+  const hue = 225 + (body.x / TRACK_LENGTH) * 80;
+  const sky = context.createLinearGradient(0, 0, 0, groundY);
+  sky.addColorStop(0, `hsl(${hue} 70% 24%)`);
+  sky.addColorStop(1, `hsl(${hue} 75% 38%)`);
   context.fillStyle = sky;
-  context.fillRect(0, 0, width, height);
-  const cell = 46 * scale;
-  context.strokeStyle = "#ffffff10";
-  context.lineWidth = 1;
-  const gridOffset = (scroll * 0.25) % cell;
-  for (let x = -gridOffset; x < width; x += cell) {
-    context.beginPath(); context.moveTo(x, 0); context.lineTo(x, ground); context.stroke();
-  }
-  for (let y = ground - cell; y > 0; y -= cell) {
-    context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke();
+  context.fillRect(0, 0, width, groundY);
+  const bgSize = BLOCK * 4 * scale;
+  const bgOffset = (camX * scale * 0.2) % bgSize;
+  context.strokeStyle = "#ffffff12";
+  context.lineWidth = 2;
+  for (let x = -bgOffset - bgSize; x < width + bgSize; x += bgSize) {
+    for (let y = groundY - bgSize; y > -bgSize; y -= bgSize) context.strokeRect(x + 6, y + 6, bgSize - 12, bgSize - 12);
   }
 
-  // Floor: tiled blocks
-  context.fillStyle = "#0a1430";
-  context.fillRect(0, ground, width, height - ground);
-  context.strokeStyle = "#72f2c4";
-  context.lineWidth = 3;
-  context.shadowColor = "#72f2c4";
-  context.shadowBlur = 12;
-  context.beginPath(); context.moveTo(0, ground); context.lineTo(width, ground); context.stroke();
-  context.shadowBlur = 0;
-  const tile = 40 * scale;
-  context.strokeStyle = "#72f2c42a";
-  context.lineWidth = 1.5;
-  for (let x = -(scroll % tile); x < width; x += tile) {
-    context.strokeRect(x + 2, ground + 4, tile - 4, height - ground - 8);
+  // Attempt counter floats in the world near the start, like the real thing.
+  context.save();
+  context.font = `bold ${Math.round(26 * scale)}px "Space Grotesk", sans-serif`;
+  context.textAlign = "left"; context.textBaseline = "middle";
+  context.fillStyle = "#ffffffcc";
+  context.fillText(`Attempt ${runner.attempt}`, sx(BLOCK * 3), sy(BLOCK * 5));
+  context.restore();
+
+  // Floor
+  context.fillStyle = `hsl(${hue} 70% 18%)`;
+  context.fillRect(0, groundY, width, height - groundY);
+  const tile = BLOCK * 2 * scale;
+  context.strokeStyle = "#ffffff1c";
+  context.lineWidth = 2;
+  for (let x = -((camX * scale) % tile) - tile; x < width + tile; x += tile) {
+    context.strokeRect(x + 3, groundY + 4, tile - 6, height - groundY - 8);
   }
+  context.save();
+  context.strokeStyle = "#ffffff";
+  context.shadowColor = "#ffffff";
+  context.shadowBlur = 10;
+  context.lineWidth = 2.5;
+  context.beginPath(); context.moveTo(0, groundY); context.lineTo(width, groundY); context.stroke();
+  context.restore();
+
+  // Blocks
+  LEVEL.blocks.forEach((block) => {
+    if (!visible(block.x) && !visible(block.x + block.w)) return;
+    const x = sx(block.x);
+    const y = sy(block.y + block.h);
+    const w = block.w * scale;
+    const h = block.h * scale;
+    context.fillStyle = "#0b1020";
+    context.fillRect(x, y, w, h);
+    context.strokeStyle = "#ffffff";
+    context.lineWidth = 2;
+    context.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    context.strokeStyle = "#ffffff30";
+    const cell = BLOCK * scale;
+    for (let cx = x; cx < x + w - 1; cx += cell) {
+      for (let cy = y; cy < y + h - 1; cy += cell) context.strokeRect(cx + 5, cy + 5, cell - 10, cell - 10);
+    }
+  });
+
+  // Spikes
+  LEVEL.spikes.forEach((spike) => {
+    if (!visible(spike.x)) return;
+    const x = sx(spike.x);
+    const base = sy(spike.y);
+    const half = (BLOCK / 2) * scale;
+    context.save();
+    context.fillStyle = "#0b1020";
+    context.strokeStyle = "#ffffff";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(x - half, base);
+    context.lineTo(x, base - BLOCK * scale);
+    context.lineTo(x + half, base);
+    context.closePath();
+    context.fill();
+    context.stroke();
+    context.restore();
+  });
+
+  // Jump pads and rings
+  const pulse = 1 + Math.sin(now / 160) * 0.08;
+  LEVEL.pads.forEach((pad, index) => {
+    if (!visible(pad.x)) return;
+    context.save();
+    context.fillStyle = body.usedPads.has(index) ? "#b8962e" : "#ffd84a";
+    context.shadowColor = "#ffd84a";
+    context.shadowBlur = 14;
+    context.beginPath();
+    context.ellipse(sx(pad.x), sy(pad.y), 13 * scale, 6 * scale, 0, Math.PI, 0);
+    context.fill();
+    context.restore();
+  });
+  LEVEL.orbs.forEach((orb, index) => {
+    if (!visible(orb.x)) return;
+    const used = body.usedOrbs.has(index);
+    context.save();
+    context.strokeStyle = used ? "#b8962e" : "#ffd84a";
+    context.shadowColor = "#ffd84a";
+    context.shadowBlur = used ? 0 : 18;
+    context.lineWidth = 4 * scale;
+    context.beginPath(); context.arc(sx(orb.x), sy(orb.y), 11 * scale * (used ? 1 : pulse), 0, Math.PI * 2); context.stroke();
+    context.fillStyle = used ? "#b8962e55" : "#ffd84a55";
+    context.fill();
+    context.restore();
+  });
+
+  // Coins (only the ones you haven't grabbed this attempt)
+  LEVEL.coins.forEach((coin, index) => {
+    if (!visible(coin.x) || runner.collected.has(index)) return;
+    drawCoin(context, sx(coin.x), sy(coin.y + PLAYER_SIZE / 2), 9 * scale);
+  });
 
   // Finish line
-  const finishX = worldX(TRACK_LENGTH);
-  if (finishX < width + 20) {
-    for (let y = 0; y < ground; y += 14) {
-      context.fillStyle = (Math.floor(y / 14) % 2) ? "#ffffff" : "#111827";
-      context.fillRect(finishX, y, 10, 14);
+  if (visible(TRACK_LENGTH, 20)) {
+    const x = sx(TRACK_LENGTH);
+    const square = 12 * scale;
+    for (let y = 0; y < groundY; y += square) {
+      context.fillStyle = Math.floor(y / square) % 2 ? "#ffffff" : "#0b1020";
+      context.fillRect(x, y, square, square);
+      context.fillStyle = Math.floor(y / square) % 2 ? "#0b1020" : "#ffffff";
+      context.fillRect(x + square, y, square, square);
     }
   }
 
-  // Spikes and coins
-  const spikeSize = 30 * scale;
-  OBSTACLE_POSITIONS.forEach((world, index) => {
-    const x = worldX(world);
-    if (x < -40 || x > width + 40) return;
-    drawSpike(context, x, ground, spikeSize);
-    if (index % 2) drawSpike(context, x + spikeSize * 0.9, ground, spikeSize * 0.85);
-  });
-  COIN_POSITIONS.forEach((world, index) => {
-    const x = worldX(world);
-    if (x > -20 && x < width + 20 && !local.collected.has(index)) drawCoin(context, x, ground - 70 * scale);
-  });
-
-  // Everyone else on the same track: other players + bots as ghosts
+  // Everyone else on the same track, as ghosts.
   const elapsed = raceElapsedSeconds();
   const seed = state.room?.race_started_at ? raceSeed(state.room.race_started_at) : 0;
   const others = [
     ...state.players.filter((player) => player.user_id !== state.user.id).map((player) => {
       const remote = state.remoteRunners.get(player.user_id);
       return {
-        progress: remote?.progress ?? (player.finish_place ? TRACK_LENGTH : 0),
-        jump: typeof remote?.jump === "number" ? remote.jump : null,
+        x: remote?.progress ?? (player.finish_place ? TRACK_LENGTH : 0),
+        y: remote?.y ?? 0,
+        angle: remote?.angle ?? 0,
+        dead: Boolean(remote?.dead),
         character: character(player.character_id),
         name: player.display_name,
       };
     }),
     ...bots().map((bot) => {
-      const progress = botProgress(seed, bot.index, elapsed);
-      return {
-        progress,
-        jump: progress < TRACK_LENGTH ? autoJumpPhase(progress, botSpeed(seed, bot.index)) : null,
-        character: bot.character,
-        name: bot.name,
-      };
+      const ghost = botState(seed, bot.index, elapsed);
+      return { ...ghost, character: bot.character, name: bot.name.replace(/ \(bot\)$/, "") };
     }),
   ];
-  const size = 15 * scale;
-  context.font = `${Math.round(11 * scale)}px 'DM Mono', monospace`;
+  const size = PLAYER_SIZE * scale;
+  context.font = `${Math.max(10, Math.round(11 * scale))}px 'DM Mono', monospace`;
   context.textAlign = "center"; context.textBaseline = "bottom";
-  const jumping = now < local.jumpingUntil;
-  const phase = jumping ? (now - local.jumpOrigin) / (local.jumpingUntil - local.jumpOrigin) : 0;
-  const myLift = jumping ? Math.sin(Math.PI * phase) * local.stats.jumpHeight * scale : 0;
-  // Name tags skip any spot that would overlap a tag already placed (YOU first).
   const tags = [];
   const tagFits = (x, y, label) => {
     const half = context.measureText(label).width / 2 + 4;
@@ -952,55 +1032,53 @@ function drawRace(canvas, now) {
     tags.push({ x, y, half });
     return true;
   };
-  const myTagY = ground - size * 2.4 - 8 - myLift;
-  tagFits(runnerX, myTagY, "YOU");
-  const placed = others.map((runner) => {
-    const x = worldX(runner.progress);
-    const lift = runner.jump === null ? 0 : Math.sin(Math.PI * runner.jump) * DEFAULT_JUMP_HEIGHT * scale;
-    return { runner, x, lift };
-  }).filter(({ x }) => x > -30 && x < width + 30)
-    .sort((a, b) => Math.abs(a.x - runnerX) - Math.abs(b.x - runnerX));
-  placed.forEach(({ runner, x, lift }) => {
-    const spin = runner.jump === null ? 0 : runner.jump * Math.PI;
-    context.globalAlpha = 0.45;
-    drawAvatar(context, runner, x, ground - size - 2 - lift, size, spin);
+  const myX = sx(body.x);
+  const myY = sy(body.y + PLAYER_SIZE / 2);
+  tagFits(myX, myY - size, "YOU");
+  const ghosts = others.filter((ghost) => !ghost.dead && visible(ghost.x))
+    .sort((a, b) => Math.abs(a.x - body.x) - Math.abs(b.x - body.x));
+  ghosts.forEach((ghost) => drawCube(context, sx(ghost.x), sy(ghost.y + PLAYER_SIZE / 2), size, ghost.angle, ghost.character, 0.38));
+  context.fillStyle = "#ffffffcc";
+  ghosts.forEach((ghost) => {
+    const x = sx(ghost.x);
+    const y = sy(ghost.y + PLAYER_SIZE / 2) - size * 0.8;
+    if (tagFits(x, y, ghost.name)) context.fillText(ghost.name, x, y);
   });
-  context.globalAlpha = 0.8;
-  context.fillStyle = "#d5def0";
-  placed.forEach(({ runner, x, lift }) => {
-    const label = runner.name.replace(/ \(bot\)$/, "");
-    const y = ground - size * 2 - 8 - lift;
-    if (tagFits(x, y, label)) context.fillText(label, x, y);
-  });
-  context.globalAlpha = 1;
 
   // You
-  drawAvatar(context, local, runnerX, ground - size * 1.15 - 2 - myLift, size * 1.15, jumping ? phase * Math.PI : 0);
-  context.fillStyle = "#72f2c4";
-  context.fillText("YOU", runnerX, myTagY);
+  if (!body.dead) {
+    drawCube(context, myX, myY, size, body.angle, runner.character);
+    context.fillStyle = "#ffffff";
+    context.fillText("YOU", myX, myY - size * 0.8);
+  }
+  if (runner.explosion) {
+    drawExplosion(context, sx(runner.explosion.x), sy(runner.explosion.y + PLAYER_SIZE / 2), size,
+      (now - runner.explosion.time) / 1000, runner.character.color);
+  }
 
-  // Progress strip + position
-  const stripLeft = 20;
-  const stripRight = width - 130;
-  const stripY = 18;
-  const stripX = (progress) => stripLeft + (stripRight - stripLeft) * (progress / TRACK_LENGTH);
-  context.fillStyle = "#ffffff22";
-  roundedRect(context, stripLeft, stripY - 3, stripRight - stripLeft, 6, 3);
+  // Progress bar across the top (with everyone's dots) + your place.
+  const barWidth = Math.min(420, width * 0.5);
+  const barLeft = (width - barWidth) / 2;
+  const barY = 16;
+  const percent = Math.floor(Math.min(100, (body.x / TRACK_LENGTH) * 100));
+  context.fillStyle = "#00000055";
+  roundedRect(context, barLeft, barY - 5, barWidth, 10, 5);
   context.fill();
   context.fillStyle = "#72f2c4";
-  roundedRect(context, stripLeft, stripY - 3, Math.max(6, stripX(local.progress) - stripLeft), 6, 3);
+  roundedRect(context, barLeft, barY - 5, Math.max(10, barWidth * (body.x / TRACK_LENGTH)), 10, 5);
   context.fill();
-  others.forEach((runner) => {
-    context.fillStyle = runner.character.color;
-    context.beginPath(); context.arc(stripX(runner.progress), stripY, 4, 0, Math.PI * 2); context.fill();
+  others.forEach((ghost) => {
+    context.fillStyle = ghost.character.color;
+    context.beginPath(); context.arc(barLeft + barWidth * Math.min(1, ghost.x / TRACK_LENGTH), barY, 3.5, 0, Math.PI * 2); context.fill();
   });
-  context.fillStyle = "#ffffff";
-  context.beginPath(); context.arc(stripX(local.progress), stripY, 6, 0, Math.PI * 2); context.fill();
-  const position = 1 + others.filter((runner) => runner.progress > local.progress).length;
   context.font = "bold 13px 'DM Mono', monospace";
-  context.textAlign = "right"; context.textBaseline = "middle";
+  context.textBaseline = "middle";
+  context.textAlign = "left";
   context.fillStyle = "#ffffff";
-  context.fillText(`P${position}/${others.length + 1} · ${Math.floor(Math.min(100, local.progress / TRACK_LENGTH * 100))}%`, width - 16, stripY);
+  context.fillText(`${percent}%`, barLeft + barWidth + 10, barY);
+  const position = 1 + others.filter((ghost) => ghost.x > body.x || ghost.finished).length;
+  context.textAlign = "right";
+  context.fillText(`P${position}/${others.length + 1}`, barLeft - 10, barY);
 }
 
 async function finishRace() {
@@ -1043,6 +1121,21 @@ function sendRaceProgress(runner, progress) {
   return request;
 }
 
+function crash(runner, now) {
+  runner.explosion = { x: runner.body.x, y: runner.body.y, time: now };
+  runner.deadUntil = now + RESPAWN_DELAY * 1000;
+  runner.needsRestart = true;
+}
+
+function respawn(runner) {
+  runner.body = newRunnerBody();
+  runner.attempt += 1;
+  runner.progress = 0;
+  runner.collected = new Set();
+  runner.pickups = 0;
+  runner.accumulator = 0;
+}
+
 function tickRace(now, canvas) {
   if (state.screen !== "race" || !state.runner) return;
   const runner = state.runner;
@@ -1050,52 +1143,68 @@ function tickRace(now, canvas) {
   runner.lastFrame = now;
   const elapsed = (now - runner.startTime) / 1000;
   const shieldActive = runner.stats.invincible && elapsed < INVINCIBILITY_SECONDS;
-  const jumpActive = now < runner.jumpingUntil;
-  const speed = now < runner.slowUntil ? runner.stats.speed * 0.45 : runner.stats.speed;
-  const oldProgress = runner.progress;
 
-  if (!runner.finished) runner.progress = Math.min(TRACK_LENGTH, runner.progress + speed * delta);
-  OBSTACLE_POSITIONS.forEach((obstacle, index) => {
-    if (oldProgress < obstacle && runner.progress >= obstacle && !jumpActive && !shieldActive) {
-      runner.slowUntil = now + 800;
-      setNotice("Hit a spike! Jump over the next one.");
-      window.setTimeout(() => setNotice(""), 1700);
+  if (runner.body.dead) {
+    if (now >= runner.deadUntil) respawn(runner);
+  } else if (!runner.finished) {
+    runner.accumulator += delta;
+    while (runner.accumulator >= STEP && !runner.body.dead && runner.body.x < TRACK_LENGTH) {
+      runner.accumulator -= STEP;
+      const result = stepBody(runner.body, runner.held, runner.stats.speed, runner.stats.jumpMult, { invincible: shieldActive });
+      if (result.coin !== null && !runner.collected.has(result.coin)) {
+        runner.collected.add(result.coin);
+        runner.pickups = runner.collected.size;
+      }
     }
-    if (oldProgress < obstacle && runner.progress >= obstacle && shieldActive) {
-      setNotice("Shield blocked an obstacle!");
-      window.setTimeout(() => setNotice(""), 1000);
-    }
-    void index;
-  });
-  COIN_POSITIONS.forEach((coin, index) => {
-    if (!runner.collected.has(index) && oldProgress < coin && runner.progress >= coin) {
-      runner.collected.add(index);
-      runner.pickups += 1;
-    }
-  });
+    if (runner.body.dead) crash(runner, now);
+    runner.progress = Math.min(TRACK_LENGTH, runner.body.x);
+    runner.best = Math.max(runner.best, runner.progress);
+  }
 
-  if (now - runner.lastBroadcast > 100 && subscription) {
+  if (now - runner.lastBroadcast > 80 && subscription) {
     runner.lastBroadcast = now;
     void subscription.send({
       type: "broadcast",
       event: "runner",
       payload: {
         user_id: state.user.id,
-        progress: runner.progress,
-        jump: now < runner.jumpingUntil ? (now - runner.jumpOrigin) / (runner.jumpingUntil - runner.jumpOrigin) : null,
+        progress: runner.body.x,
+        y: runner.body.y,
+        angle: runner.body.angle,
+        dead: runner.body.dead,
       },
     });
   }
-  if (!runner.finished && !runner.progressRequest && now - (runner.lastServerUpdate ?? 0) > 400) {
-    runner.lastServerUpdate = now;
-    void sendRaceProgress(runner, runner.progress).catch(() => {});
+
+  // Server sync: a crash resets your saved progress (and this attempt's coins) to 0.
+  if (!runner.finished && !runner.progressRequest) {
+    if (runner.needsRestart) {
+      runner.needsRestart = false;
+      runner.progressRequest = rpc("update_race_progress", {
+        room_code: state.room.code, new_progress: 0, new_coin_indices: [],
+      }).then(() => {
+        runner.savedCoinIndices.clear();
+      }).catch(() => {
+        runner.needsRestart = true;
+      }).finally(() => {
+        runner.progressRequest = null;
+      });
+    } else if (!runner.body.dead && now - (runner.lastServerUpdate ?? 0) > 400) {
+      runner.lastServerUpdate = now;
+      void sendRaceProgress(runner, runner.progress).catch(() => {});
+    }
   }
+
   drawRace(canvas, now);
   const status = document.querySelector("#race-status");
-  if (status) status.textContent = runner.progress >= TRACK_LENGTH ? "Finish line!" : shieldActive ? `Shield ${Math.ceil(INVINCIBILITY_SECONDS - elapsed)}s` : "Keep moving!";
+  if (status) {
+    status.textContent = runner.progress >= TRACK_LENGTH ? "Complete!"
+      : shieldActive ? `Attempt ${runner.attempt} · shield ${Math.ceil(INVINCIBILITY_SECONDS - elapsed)}s`
+        : `Attempt ${runner.attempt} · best ${Math.floor((runner.best / TRACK_LENGTH) * 100)}%`;
+  }
   const controls = document.querySelector(".game-controls span:last-child");
-  if (controls) controls.textContent = `✦ ${runner.pickups} / ${COIN_POSITIONS.length} coins · ${shieldActive ? Math.ceil(INVINCIBILITY_SECONDS - elapsed) : 0}s shield`;
-  if (runner.progress >= TRACK_LENGTH) {
+  if (controls) controls.textContent = `✦ ${runner.pickups} / ${COIN_POSITIONS.length} coins`;
+  if (runner.progress >= TRACK_LENGTH && !runner.body.dead && !runner.needsRestart) {
     void finishRace();
     return;
   }
