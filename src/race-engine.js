@@ -50,7 +50,7 @@ export function raceSeed(raceStartedAt) {
 }
 
 export function botSpeed(seed, botIndex) {
-  return 190 + ((seed * 7919 + (botIndex + 1) * 104729) % 111);
+  return 190 + ((seed * 7919 + (botIndex + 1) * 41) % 111);
 }
 
 export function botFinishSeconds(seed, botIndex) {

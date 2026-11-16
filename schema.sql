@@ -52,7 +52,7 @@ $$;
 
 create or replace function public.bot_speed(seed bigint, bot_index integer)
 returns integer language sql immutable set search_path = '' as $$
-  select (190 + ((seed * 7919 + (bot_index + 1) * 104729) % 111))::integer
+  select (190 + ((seed * 7919 + (bot_index + 1) * 41) % 111))::integer
 $$;
 
 create or replace function public.bots_finished_by(bot_count integer, started timestamptz, at_time timestamptz)
