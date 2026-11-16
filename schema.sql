@@ -344,7 +344,9 @@ begin
     where m.room_id = selected_room.id and p.id = m.user_id;
   update public.profiles p set temporary_buffs = '{}', updated_at = now()
     where p.id in (select user_id from public.room_members where room_id = selected_room.id);
-  update public.rooms set status = 'race', race_id = new_race, race_started_at = now(), updated_at = now()
+  -- Start 3 seconds from now so every player (and every bot) leaves 0% together after a countdown.
+  update public.rooms set status = 'race', race_id = new_race,
+    race_started_at = now() + interval '3 seconds', updated_at = now()
     where id = selected_room.id;
   update public.room_members set finish_place = null, finished_at = null, race_progress = 0,
     collected_coin_indices = '{}' where room_id = selected_room.id;
@@ -387,7 +389,7 @@ begin
       where room_id = selected_room.id and user_id = auth.uid();
     return;
   end if;
-  if new_progress > floor(extract(epoch from (now() - selected_room.race_started_at)) * 650 + 100)::integer then
+  if new_progress > floor(greatest(0, extract(epoch from (now() - selected_room.race_started_at))) * 650 + 100)::integer then
     raise exception 'Race progress is faster than the maximum game speed';
   end if;
   if coalesce(cardinality(new_coin_indices), 0) <>
@@ -521,6 +523,11 @@ begin
   return selected_room;
 end;
 $$;
+
+create or replace function public.server_time()
+returns timestamptz language sql stable set search_path = '' as $$ select clock_timestamp() $$;
+revoke all on function public.server_time() from public, anon;
+grant execute on function public.server_time() to authenticated;
 
 revoke all on function public.set_bot_count(text, integer) from public, anon;
 grant execute on function public.set_bot_count(text, integer) to authenticated;

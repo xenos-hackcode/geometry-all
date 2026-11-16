@@ -139,9 +139,50 @@ function bots() {
   }));
 }
 
+// The server's clock is the one clock everyone races on (players and bots alike).
+let clockOffset = null;
+
+async function syncServerClock() {
+  if (clockOffset !== null) return clockOffset;
+  let best = null;
+  for (let sample = 0; sample < 3; sample += 1) {
+    const sent = Date.now();
+    const { data, error } = await db.rpc("server_time");
+    const received = Date.now();
+    if (error) throw error;
+    const roundTrip = received - sent;
+    if (!best || roundTrip < best.roundTrip) {
+      best = { roundTrip, offset: Date.parse(data) - (sent + received) / 2 };
+    }
+  }
+  clockOffset = best.offset;
+  return clockOffset;
+}
+
+function serverNow() {
+  return Date.now() + (clockOffset ?? 0);
+}
+
 function raceElapsedSeconds() {
   if (!state.room?.race_started_at) return 0;
-  return Math.max(0, (Date.now() - Date.parse(state.room.race_started_at)) / 1000);
+  return Math.max(0, (serverNow() - Date.parse(state.room.race_started_at)) / 1000);
+}
+
+// Lines this runner's start up with the shared start time (after the countdown).
+async function scheduleRaceStart(runner) {
+  try {
+    await syncServerClock();
+    if (!state.room.race_started_at) {
+      const { data, error } = await db.from("rooms").select("race_started_at").eq("id", state.room.id).single();
+      if (error) throw error;
+      state.room.race_started_at = data.race_started_at;
+    }
+    const msUntilGo = Date.parse(state.room.race_started_at) - serverNow();
+    runner.startTime = performance.now() + msUntilGo;
+  } catch (error) {
+    runner.startTime = performance.now() + 3000;
+    setNotice(error?.message ?? "Could not sync the start time.", true);
+  }
 }
 
 async function setBots(count) {
@@ -664,6 +705,7 @@ async function startRace() {
     ...(state.profile.temporary_buffs ?? []).map((buff) => `${buff}_temp`),
   ];
   await rpc("start_race", { room_code: state.room.code });
+  state.room.race_started_at = null; // fetched fresh by scheduleRaceStart
   state.raceBuffs = raceBuffs;
   await subscription.send({ type: "broadcast", event: "race-start", payload: { started_by: state.user.id } });
   beginRace();
@@ -692,7 +734,7 @@ function beginRace() {
     progressRequest: null,
     lastFrame: performance.now(),
     lastBroadcast: 0,
-    startTime: performance.now(),
+    startTime: Infinity, // set by scheduleRaceStart; nobody moves before GO
     finished: false,
     place: null,
     character: avatar,
@@ -700,6 +742,7 @@ function beginRace() {
   };
   state.remoteRunners.clear();
   renderRace();
+  void scheduleRaceStart(state.runner);
 }
 
 function bindCanvasInput(canvas) {
@@ -1079,6 +1122,21 @@ function drawRace(canvas, now) {
   const position = 1 + others.filter((ghost) => ghost.x > body.x || ghost.finished).length;
   context.textAlign = "right";
   context.fillText(`P${position}/${others.length + 1}`, barLeft - 10, barY);
+
+  // 3-2-1-GO
+  const untilGo = (runner.startTime - now) / 1000;
+  if (untilGo > -0.6) {
+    const label = !Number.isFinite(untilGo) ? "Get ready" : untilGo > 0 ? String(Math.ceil(untilGo)) : "GO!";
+    context.save();
+    context.font = `bold ${Math.round(height * 0.22)}px "Space Grotesk", sans-serif`;
+    context.textAlign = "center"; context.textBaseline = "middle";
+    context.fillStyle = label === "GO!" ? "#72f2c4" : "#ffffff";
+    context.shadowColor = "#000000aa";
+    context.shadowBlur = 18;
+    if (label === "Get ready") context.font = `bold ${Math.round(height * 0.1)}px "Space Grotesk", sans-serif`;
+    context.fillText(label, width / 2, height * 0.55);
+    context.restore();
+  }
 }
 
 async function finishRace() {
@@ -1146,7 +1204,9 @@ function tickRace(now, canvas) {
   const elapsed = (now - runner.startTime) / 1000;
   const shieldActive = runner.stats.invincible && elapsed < INVINCIBILITY_SECONDS;
 
-  if (runner.body.dead) {
+  if (now < runner.startTime) {
+    runner.accumulator = 0; // waiting for GO: everyone is lined up at 0%
+  } else if (runner.body.dead) {
     if (now >= runner.deadUntil) respawn(runner);
   } else if (!runner.finished) {
     runner.accumulator += delta;
@@ -1179,7 +1239,7 @@ function tickRace(now, canvas) {
   }
 
   // Server sync: a crash resets your saved progress (and this attempt's coins) to 0.
-  if (!runner.finished && !runner.progressRequest) {
+  if (!runner.finished && !runner.progressRequest && now >= runner.startTime) {
     if (runner.needsRestart) {
       runner.needsRestart = false;
       runner.progressRequest = rpc("update_race_progress", {
@@ -1200,7 +1260,8 @@ function tickRace(now, canvas) {
   drawRace(canvas, now);
   const status = document.querySelector("#race-status");
   if (status) {
-    status.textContent = runner.progress >= TRACK_LENGTH ? "Complete!"
+    status.textContent = now < runner.startTime ? "Get ready…"
+      : runner.progress >= TRACK_LENGTH ? "Complete!"
       : shieldActive ? `Attempt ${runner.attempt} · shield ${Math.ceil(INVINCIBILITY_SECONDS - elapsed)}s`
         : `Attempt ${runner.attempt} · best ${Math.floor((runner.best / TRACK_LENGTH) * 100)}%`;
   }
